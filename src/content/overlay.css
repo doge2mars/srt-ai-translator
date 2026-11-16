@@ -28,9 +28,14 @@
   user-select: none;
 }
 
+.srt-ai-subtitle-box:not(.hidden) {
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
 .srt-ai-subtitle-box.hidden {
-  opacity: 0;
-  pointer-events: none;
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
 
 .srt-ai-line {
@@ -129,13 +134,13 @@
   display: flex;
 }
 
-/* Hide YouTube & fnOS (xgplayer) native caption box when our bilingual overlay has cues loaded */
+/* Hide YouTube & fnOS (xgplayer) native caption box (never hide our own .srt-ai-* elements) */
 .html5-video-player:has(.srt-ai-overlay-root.has-cues) .ytp-caption-window-container,
-.xgplayer:has(.srt-ai-overlay-root.has-cues) .xgplayer-subtitles,
-.xgplayer:has(.srt-ai-overlay-root.has-cues) .xgplayer-subtitle,
-.xgplayer:has(.srt-ai-overlay-root.has-cues) [class*="xgplayer-text-track"],
-.xgplayer:has(.srt-ai-overlay-root.has-cues) [class*="xgplayer-subtitles"],
-[class*="trim-mc"]:has(.srt-ai-overlay-root.has-cues) [class*="subtitle"] {
+.xgplayer:has(.srt-ai-overlay-root.has-cues) .xgplayer-subtitles:not([class*="srt-ai"]),
+.xgplayer:has(.srt-ai-overlay-root.has-cues) .xgplayer-subtitle:not([class*="srt-ai"]),
+.xgplayer:has(.srt-ai-overlay-root.has-cues) [class*="xgplayer-text-track"]:not([class*="srt-ai"]),
+.xgplayer:has(.srt-ai-overlay-root.has-cues) [class*="xgplayer-subtitles"]:not([class*="srt-ai"]),
+[class*="trim-mc"]:has(.srt-ai-overlay-root.has-cues) [class*="xg-subtitles"]:not([class*="srt-ai"]) {
   opacity: 0 !important;
   pointer-events: none !important;
 }
