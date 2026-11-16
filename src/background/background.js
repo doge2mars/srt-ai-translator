@@ -181,9 +181,15 @@ const GOOGLE_LANG_MAP = {
   '日本語': 'ja'
 };
 
-async function callGoogleFreeTranslate(textPayload, targetLang, retries = 2) {
+const GOOGLE_ENDPOINTS = [
+  'https://translate.google.com/translate_a/single',
+  'https://translate.googleapis.com/translate_a/single'
+];
+
+async function callGoogleFreeTranslate(textPayload, targetLang, endpointIdx = 0) {
   const tl = GOOGLE_LANG_MAP[targetLang] || 'zh-CN';
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(tl)}&dt=t`;
+  const base = GOOGLE_ENDPOINTS[endpointIdx] || GOOGLE_ENDPOINTS[0];
+  const url = `${base}?client=gtx&sl=auto&tl=${encodeURIComponent(tl)}&dt=t`;
   let resp;
   try {
     resp = await fetch(url, {
@@ -194,20 +200,24 @@ async function callGoogleFreeTranslate(textPayload, targetLang, retries = 2) {
       body: `q=${encodeURIComponent(textPayload)}`
     });
   } catch (netErr) {
+    if (endpointIdx + 1 < GOOGLE_ENDPOINTS.length) {
+      return callGoogleFreeTranslate(textPayload, targetLang, endpointIdx + 1);
+    }
     throw new Error('Google 翻译网络连接失败，请确认是否已开启网络代理并能访问 Google 服务');
   }
 
   if (resp.status === 429) {
-    if (retries > 0) {
-      // Backoff if rate limited: wait 1.8s then 3s and retry
-      const waitMs = retries === 2 ? 1800 : 3200;
-      await new Promise((r) => setTimeout(r, waitMs));
-      return callGoogleFreeTranslate(textPayload, targetLang, retries - 1);
+    if (endpointIdx + 1 < GOOGLE_ENDPOINTS.length) {
+      // Switch to alternative Google endpoint immediately
+      return callGoogleFreeTranslate(textPayload, targetLang, endpointIdx + 1);
     }
-    throw new Error('Google 翻译频控限流 (429)，请稍等 1 分钟或切换到本地/智谱大模型');
+    throw new Error('Google 翻译暂时频控 (429)，你的代理节点 IP 正在冷却，请切换代理节点或使用本地/智谱大模型');
   }
 
   if (!resp.ok) {
+    if (endpointIdx + 1 < GOOGLE_ENDPOINTS.length) {
+      return callGoogleFreeTranslate(textPayload, targetLang, endpointIdx + 1);
+    }
     throw new Error(`Google 翻译请求失败: HTTP ${resp.status}`);
   }
   const data = await resp.json();
