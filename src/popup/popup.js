@@ -63,7 +63,8 @@ const els = {
   newModelBox: document.getElementById('newModelBox'),
   newModelNameInput: document.getElementById('newModelNameInput'),
   confirmAddModelBtn: document.getElementById('confirmAddModelBtn'),
-  cancelAddModelBtn: document.getElementById('cancelAddModelBtn')
+  cancelAddModelBtn: document.getElementById('cancelAddModelBtn'),
+  openStandaloneBtn: document.getElementById('openStandaloneBtn')
 };
 
 let providerProfiles = {};
@@ -432,6 +433,40 @@ document.getElementById('copyDiagBtn').addEventListener('click', async () => {
   } catch (_) {
     document.execCommand('copy');
   }
+});
+
+// Standalone window support
+const isStandalone = window.location.search.includes('standalone') || window.innerWidth > 450;
+if (isStandalone && els.openStandaloneBtn) {
+  els.openStandaloneBtn.style.display = 'none';
+}
+
+els.openStandaloneBtn?.addEventListener('click', () => {
+  const url = chrome.runtime.getURL('src/popup/popup.html?standalone=1');
+  if (chrome.windows && chrome.windows.create) {
+    chrome.windows.create({
+      url,
+      type: 'popup',
+      width: 440,
+      height: 680,
+      focused: true
+    });
+    window.close();
+  } else {
+    window.open(url, '_blank');
+  }
+});
+
+// Immediate save on blur / close so half-typed keys or URLs are never lost
+function flushImmediateSave() {
+  saveCurrentProviderProfile();
+  const settings = collectSettingsFromUI();
+  chrome.storage.local.set({ srtAiSettings: settings }).catch(() => {});
+}
+
+window.addEventListener('beforeunload', flushImmediateSave);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) flushImmediateSave();
 });
 
 // Init
