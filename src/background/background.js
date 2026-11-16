@@ -391,10 +391,10 @@ async function handleTestConnection(customSettings) {
   const settings = customSettings ? { ...DEFAULT_SETTINGS, ...customSettings } : await getSettings();
   const start = Date.now();
   if (settings.provider === 'google_free') {
-    const res = await callGoogleFreeTranslate(['Hello, welcome to the movie!'], settings.targetLang);
+    const res = await callGoogleFreeTranslate('Hello, welcome to the movie!', settings.targetLang);
     return {
       ok: true,
-      reply: res.join(' '),
+      reply: typeof res === 'string' ? res : String(res),
       latencyMs: Date.now() - start
     };
   }
