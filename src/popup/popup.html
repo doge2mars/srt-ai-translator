@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SRT AI Translator</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="title-row">
+        <span class="logo">文</span>
+        <div>
+          <h1>SRT AI 字幕翻译</h1>
+          <p class="subtitle">支持本地模型 & 在线 API · Chrome / Safari</p>
+        </div>
+      </div>
+      <label class="switch" title="开启/关闭翻译">
+        <input type="checkbox" id="enabled" />
+        <span class="slider"></span>
+      </label>
+    </header>
+
+    <section class="card status-card">
+      <div class="status-info">
+        <span id="pageStatusText">正在检测当前页面视频...</span>
+        <span id="pageSubSource" class="muted"></span>
+      </div>
+      <div class="status-actions">
+        <button id="importSrtBtn" class="btn btn-secondary">导入 SRT</button>
+        <button id="exportSrtBtn" class="btn btn-primary" title="将已翻译的字幕保存为 .srt 文件">保存 SRT</button>
+        <input type="file" id="popupFileInput" accept=".srt,.vtt,text/plain" hidden />
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>AI 模型配置</h2>
+      <div class="field">
+        <label for="provider">服务预设</label>
+        <select id="provider">
+          <option value="google_free">Google 免费翻译 (免 Key · 极速)</option>
+          <option value="ollama">Ollama (本地默认)</option>
+          <option value="lmstudio">LM Studio (本地)</option>
+          <option value="zhipu">智谱 GLM (在线)</option>
+          <option value="deepseek">DeepSeek (在线)</option>
+          <option value="openai">OpenAI (在线)</option>
+          <option value="custom">自定义 (OpenAI 兼容)</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="baseUrl">API Base URL</label>
+        <input type="text" id="baseUrl" placeholder="http://localhost:11434/v1" />
+      </div>
+
+      <div class="row-2">
+        <div class="field">
+          <label for="model">模型名称</label>
+          <input type="text" id="model" placeholder="qwen2.5:7b" />
+        </div>
+        <div class="field">
+          <label for="targetLang">目标语言</label>
+          <select id="targetLang">
+            <option value="简体中文">简体中文</option>
+            <option value="繁體中文">繁體中文</option>
+            <option value="English">English</option>
+            <option value="日本語">日本語</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="apiKey">API Key（本地模型可留空或填 ollama）</label>
+        <input type="password" id="apiKey" placeholder="ollama / sk-..." />
+      </div>
+
+      <div class="field">
+        <label for="domainPreset">视频专业领域（提升术语准确度）</label>
+        <select id="domainPreset">
+          <option value="general">通用影视 / 日常对话</option>
+          <option value="track_fitness">田径 / 跑步 / 体能训练教练</option>
+          <option value="medical_health">运动康复 / 解剖 / 医学健康</option>
+          <option value="tech_code">科技数码 / AI / 编程开发</option>
+          <option value="finance_biz">商业财经 / 投资访谈</option>
+          <option value="gaming_anime">游戏电竞 / 动漫二次元</option>
+          <option value="academic">学术公开课 / 科学纪录片</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="customPrompt">自定义背景/术语补充（可选）</label>
+        <input type="text" id="customPrompt" placeholder="例：日本短跑教练讲解，マーカー走=标志物跑" />
+      </div>
+
+      <div class="btn-row">
+        <button id="testBtn" class="btn btn-outline">测试连接</button>
+        <button id="saveBtn" class="btn btn-primary">保存设置</button>
+      </div>
+      <div id="testResult" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>显示与预翻译</h2>
+      <div class="row-2">
+        <div class="field">
+          <label for="displayMode">显示模式</label>
+          <select id="displayMode">
+            <option value="bilingual">双语（译文+原文）</option>
+            <option value="translated">仅显示译文</option>
+            <option value="original">仅显示原文</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="batchSize">每批预译句数</label>
+          <input type="number" id="batchSize" min="5" max="30" value="15" />
+        </div>
+      </div>
+
+      <div class="row-2">
+        <div class="field">
+          <label for="fontSize">字体大小 (<span id="fontSizeVal">22</span>px)</label>
+          <input type="range" id="fontSize" min="14" max="36" value="22" />
+        </div>
+        <div class="field">
+          <label for="bottomOffset">底部边距 (<span id="bottomOffsetVal">48</span>px)</label>
+          <input type="range" id="bottomOffset" min="16" max="240" value="48" />
+        </div>
+      </div>
+      <div style="font-size:11px;color:#94a3b8;display:flex;justify-content:space-between;">
+        <span>💡 快捷键: Option+T / Alt+T</span>
+        <span>🖱️ 支持鼠标直接拖拽字幕</span>
+      </div>
+
+      <div class="footer-row">
+        <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#cbd5e1;cursor:pointer;">
+          <input type="checkbox" id="autoDownloadSrt" />
+          全片翻译完自动下载 .srt
+        </label>
+        <button id="clearCacheBtn" class="btn btn-link">清除翻译缓存</button>
+      </div>
+      <span id="cacheMsg" class="muted"></span>
+    </section>
+
+    <section class="card">
+      <h2>故障诊断</h2>
+      <div class="btn-row">
+        <button id="diagBtn" class="btn btn-outline">生成诊断信息</button>
+        <button id="copyDiagBtn" class="btn btn-secondary">复制</button>
+      </div>
+      <textarea id="diagOutput" readonly placeholder="在飞牛视频播放页（字幕正在显示时）点击「生成诊断信息」，然后复制发给开发者"></textarea>
+    </section>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

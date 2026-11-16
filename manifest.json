@@ -1,0 +1,62 @@
+{
+  "manifest_version": 3,
+  "name": "SRT AI Translator - 实时视频字幕翻译",
+  "version": "1.0.0",
+  "description": "专为飞牛OS等网页视频播放器打造的实时双语字幕翻译插件，支持本地AI模型(Ollama/LM Studio)与在线模型。",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "webRequest",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "SRT AI Translator",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "src/background/background.js",
+    "type": "module"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["src/content/interceptor.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "srt-ai-translator@local",
+      "strict_min_version": "115.0"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/interceptor.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/utils/srtParser.js", "src/content/content.js"],
+      "css": ["src/content/overlay.css"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}
