@@ -181,17 +181,29 @@ const GOOGLE_LANG_MAP = {
   '日本語': 'ja'
 };
 
-async function callGoogleFreeTranslate(lines, targetLang) {
+async function callGoogleFreeTranslate(lines, targetLang, retries = 1) {
   const tl = GOOGLE_LANG_MAP[targetLang] || 'zh-CN';
   const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(tl)}&dt=t`;
   const joined = lines.join('\n');
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
-    },
-    body: `q=${encodeURIComponent(joined)}`
-  });
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+      },
+      body: `q=${encodeURIComponent(joined)}`
+    });
+  } catch (netErr) {
+    throw new Error('Google 翻译网络连接失败，请确认是否已开启网络代理并能访问 Google 服务');
+  }
+
+  if (resp.status === 429 && retries > 0) {
+    // Rate limited by Google, wait a moment and retry once
+    await new Promise((r) => setTimeout(r, 1200));
+    return callGoogleFreeTranslate(lines, targetLang, retries - 1);
+  }
+
   if (!resp.ok) {
     throw new Error(`Google 翻译请求失败: HTTP ${resp.status}`);
   }
@@ -215,15 +227,21 @@ async function translateCuesWithGoogleFree(targetCues, targetLang) {
     return result;
   }
 
-  // Fallback if line breaks shifted: translate individually in parallel
-  await Promise.all(
-    targetCues.map(async (c) => {
-      try {
-        const single = await callGoogleFreeTranslate([normalizeSourceLine(c.text)], targetLang);
-        if (single[0]) result[c.id] = cleanTranslatedLine(single.join(' '));
-      } catch (_) {}
-    })
-  );
+  // Fallback if line breaks shifted: translate in small batches of 3
+  for (let i = 0; i < targetCues.length; i += 3) {
+    const chunk = targetCues.slice(i, i + 3);
+    await Promise.all(
+      chunk.map(async (c) => {
+        try {
+          const single = await callGoogleFreeTranslate([normalizeSourceLine(c.text)], targetLang);
+          if (single[0]) result[c.id] = cleanTranslatedLine(single.join(' '));
+        } catch (_) {}
+      })
+    );
+    if (i + 3 < targetCues.length) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
   return result;
 }
 

@@ -593,6 +593,9 @@
         persistCacheDebounced();
         renderCurrentCue();
         updateToolbarUI();
+        if (state.settings.provider === 'google_free') {
+          await new Promise((r) => setTimeout(r, 150));
+        }
       }
     } catch (err) {
       state.lastError = err?.message || String(err);
