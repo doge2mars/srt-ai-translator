@@ -594,7 +594,7 @@
         renderCurrentCue();
         updateToolbarUI();
         if (state.settings.provider === 'google_free') {
-          await new Promise((r) => setTimeout(r, 150));
+          await new Promise((r) => setTimeout(r, 350));
         }
       }
     } catch (err) {

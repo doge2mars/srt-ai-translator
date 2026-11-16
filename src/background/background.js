@@ -181,10 +181,9 @@ const GOOGLE_LANG_MAP = {
   '日本語': 'ja'
 };
 
-async function callGoogleFreeTranslate(lines, targetLang, retries = 1) {
+async function callGoogleFreeTranslate(textPayload, targetLang, retries = 2) {
   const tl = GOOGLE_LANG_MAP[targetLang] || 'zh-CN';
   const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(tl)}&dt=t`;
-  const joined = lines.join('\n');
   let resp;
   try {
     resp = await fetch(url, {
@@ -192,16 +191,20 @@ async function callGoogleFreeTranslate(lines, targetLang, retries = 1) {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
       },
-      body: `q=${encodeURIComponent(joined)}`
+      body: `q=${encodeURIComponent(textPayload)}`
     });
   } catch (netErr) {
     throw new Error('Google 翻译网络连接失败，请确认是否已开启网络代理并能访问 Google 服务');
   }
 
-  if (resp.status === 429 && retries > 0) {
-    // Rate limited by Google, wait a moment and retry once
-    await new Promise((r) => setTimeout(r, 1200));
-    return callGoogleFreeTranslate(lines, targetLang, retries - 1);
+  if (resp.status === 429) {
+    if (retries > 0) {
+      // Backoff if rate limited: wait 1.8s then 3s and retry
+      const waitMs = retries === 2 ? 1800 : 3200;
+      await new Promise((r) => setTimeout(r, waitMs));
+      return callGoogleFreeTranslate(textPayload, targetLang, retries - 1);
+    }
+    throw new Error('Google 翻译频控限流 (429)，请稍等 1 分钟或切换到本地/智谱大模型');
   }
 
   if (!resp.ok) {
@@ -211,36 +214,35 @@ async function callGoogleFreeTranslate(lines, targetLang, retries = 1) {
   if (!Array.isArray(data) || !Array.isArray(data[0])) {
     throw new Error('Google 翻译返回格式异常');
   }
-  const fullTranslated = data[0].map((seg) => (Array.isArray(seg) ? seg[0] || '' : '')).join('');
-  return fullTranslated.split('\n').map((s) => s.trim());
+  return data[0].map((seg) => (Array.isArray(seg) ? seg[0] || '' : '')).join('');
 }
 
 async function translateCuesWithGoogleFree(targetCues, targetLang) {
-  const cleanLines = targetCues.map((c) => normalizeSourceLine(c.text));
-  const outLines = await callGoogleFreeTranslate(cleanLines, targetLang);
-  const result = {};
+  // Prepend [ID] to each line: Google Translate preserves bracketed numbers perfectly!
+  // This allows translating all 15 cues in ONE single HTTP request, eliminating line mismatch
+  // and completely avoiding Google's 429 rate limit.
+  const payload = targetCues
+    .map((c) => `[${c.id}] ${normalizeSourceLine(c.text)}`)
+    .join('\n');
 
-  if (outLines.length === targetCues.length) {
-    targetCues.forEach((c, idx) => {
-      if (outLines[idx]) result[c.id] = cleanTranslatedLine(outLines[idx]);
-    });
-    return result;
+  const translatedText = await callGoogleFreeTranslate(payload, targetLang);
+  const result = {};
+  const ids = new Set(targetCues.map((c) => c.id));
+  const lineReg = /^[\[【]?(\d+)[\]】]?\s*[:：\-\.、]?\s*(.+)$/;
+
+  for (const line of translatedText.split('\n')) {
+    const m = line.trim().match(lineReg);
+    if (m) {
+      const id = Number(m[1]);
+      if (ids.has(id)) {
+        result[id] = cleanTranslatedLine(m[2]);
+      }
+    }
   }
 
-  // Fallback if line breaks shifted: translate in small batches of 3
-  for (let i = 0; i < targetCues.length; i += 3) {
-    const chunk = targetCues.slice(i, i + 3);
-    await Promise.all(
-      chunk.map(async (c) => {
-        try {
-          const single = await callGoogleFreeTranslate([normalizeSourceLine(c.text)], targetLang);
-          if (single[0]) result[c.id] = cleanTranslatedLine(single.join(' '));
-        } catch (_) {}
-      })
-    );
-    if (i + 3 < targetCues.length) {
-      await new Promise((r) => setTimeout(r, 200));
-    }
+  // If any cue missed bracket match, fill directly if only 1 cue
+  if (Object.keys(result).length === 0 && targetCues.length === 1) {
+    result[targetCues[0].id] = cleanTranslatedLine(translatedText);
   }
   return result;
 }
