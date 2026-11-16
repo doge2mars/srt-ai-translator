@@ -225,6 +225,11 @@
     return { ok: true, fileName: `${baseName}${suffix}` };
   }
 
+  function isContextInvalidatedError(err) {
+    const s = String(err?.message || err || '');
+    return /Extension context invalidated|context invalidated/i.test(s);
+  }
+
   function adjustOffset(delta) {
     const next = Math.round(((state.settings.timeOffset || 0) + delta) * 10) / 10;
     state.settings.timeOffset = next;
@@ -272,8 +277,13 @@
 
     if (state.lastError) {
       rootEl.classList.remove('waiting-sub');
-      statusEl.textContent = `错误: ${state.lastError}`;
-      statusEl.title = state.lastError;
+      if (isContextInvalidatedError(state.lastError)) {
+        statusEl.textContent = '插件已更新，请刷新网页';
+        statusEl.title = '扩展程序在后台已重新加载，请刷新当前网页(F5)以重新连接。';
+      } else {
+        statusEl.textContent = `错误: ${state.lastError}`;
+        statusEl.title = state.lastError;
+      }
     } else if (state.cues.length === 0) {
       rootEl.classList.add('waiting-sub');
       statusEl.textContent = '等待 SRT 字幕';
@@ -559,6 +569,7 @@
         if (!resp || !resp.ok) {
           state.lastError = (resp && resp.error) || '翻译请求失败';
           consecutiveFailures++;
+          if (isContextInvalidatedError(state.lastError)) break;
           // Network/model down: stop and let user fix settings
           if (/HTTP|fetch|Failed|连接|refused/i.test(state.lastError) || consecutiveFailures >= 3) break;
           // Unparseable batch: skip these cues (count failure) and keep going

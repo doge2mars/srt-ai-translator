@@ -120,9 +120,18 @@ function parseTranslationResponse(rawText, targetCues) {
     const s = Math.min(...starts);
     const e = Math.max(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'));
     if (e > s) {
+      const jsonStr = cleaned.slice(s, e + 1);
+      let parsed = null;
       try {
-        let parsed = JSON.parse(cleaned.slice(s, e + 1));
-        if (parsed && !Array.isArray(parsed) && parsed.translations) parsed = parsed.translations;
+        parsed = JSON.parse(jsonStr);
+      } catch (_) {
+        try {
+          parsed = JSON.parse(jsonStr.replace(/,\s*([\]}])/g, '$1'));
+        } catch (_) {}
+      }
+
+      if (parsed) {
+        if (!Array.isArray(parsed) && parsed.translations) parsed = parsed.translations;
         if (Array.isArray(parsed)) {
           parsed.forEach((item, idx) => {
             if (typeof item === 'string') {
@@ -134,25 +143,26 @@ function parseTranslationResponse(rawText, targetCues) {
               if (ids.has(id) && typeof text === 'string' && text.trim()) result[id] = cleanTranslatedLine(text);
             }
           });
-        } else if (parsed && typeof parsed === 'object') {
+        } else if (typeof parsed === 'object') {
           for (const [k, v] of Object.entries(parsed)) {
             const id = Number(String(k).replace(/[^\d]/g, ''));
             if (ids.has(id) && typeof v === 'string' && v.trim()) result[id] = cleanTranslatedLine(v);
           }
         }
         if (Object.keys(result).length > 0) return result;
-      } catch (_) {
-        // fall through
       }
     }
   }
 
-  // 2. Fallback: "[ID] text" / "ID: text" lines
+  // 2. Fallback: line-by-line parser (tolerates cut-off JSON, bullet points, numbered lists)
+  const lineReg = /^(?:[\*\-•]\s*)?(?:ID\s*[:：]?)?\s*[\[【"]?(\d+)[\]】"]?\s*[:：\-\.、]?\s*(.+)$/i;
   for (const line of cleaned.split('\n')) {
-    const m = line.trim().match(/^[\[【"]?(\d+)[\]】"]?\s*[:：\-\.、]?\s*(.+)$/);
+    const m = line.trim().match(lineReg);
     if (m) {
       const id = Number(m[1]);
-      const text = cleanTranslatedLine(m[2].replace(/^["']|["'],?$/g, ''));
+      const text = cleanTranslatedLine(
+        m[2].replace(/^["'“”]\s*[:：]?\s*/, '').replace(/["'“”],?\s*$/, '')
+      );
       if (ids.has(id) && text) result[id] = text;
     }
   }
@@ -237,6 +247,7 @@ async function callChatCompletion(settings, messages, temperature = 0.2) {
   }
 
   let lastErr = null;
+  const isLocal = /localhost|127\.0\.0\.1/i.test(url);
   for (const modelName of modelsToTry) {
     const isQwen3 = /qwen3/i.test(modelName || '') && !/vl/i.test(modelName || '');
     const finalMessages = isQwen3
@@ -251,7 +262,8 @@ async function callChatCompletion(settings, messages, temperature = 0.2) {
     const body = {
       model: modelName,
       messages: finalMessages,
-      temperature
+      temperature,
+      max_tokens: 2048
     };
     if (isZhipu) {
       body.thinking = { type: 'disabled' };
@@ -259,11 +271,25 @@ async function callChatCompletion(settings, messages, temperature = 0.2) {
       body.chat_template_kwargs = { enable_thinking: false };
     }
 
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body)
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), isLocal ? 60000 : 35000);
+
+    let resp;
+    try {
+      resp = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      if (e.name === 'AbortError') {
+        throw new Error(`模型响应超时 (${isLocal ? '60s' : '35s'})，请检查模型负载或调小批次`);
+      }
+      throw e;
+    }
+    clearTimeout(timer);
 
     if (resp.ok) {
       const data = await resp.json();
