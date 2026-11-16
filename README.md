@@ -29,18 +29,28 @@
 
 ## 📦 安装教程
 
-### 1. 在 Chrome / Edge / 360 等 Chromium 浏览器中安装
+### 🚀 小白一键安装（推荐 · 无需敲命令 · 30秒搞定）
 
-1. 克隆或下载本项目到本地：
-   ```bash
-   git clone https://github.com/doge2mars/srt-ai-translator.git
-   ```
-2. 打开浏览器扩展管理页面：
-   - **Chrome**: 地址栏访问 `chrome://extensions/`
-   - **Edge**: 地址栏访问 `edge://extensions/`
-3. 开启页面右上角的 **开发者模式**（Developer mode）；
-4. 点击左上角的 **加载已解压的扩展程序**（Load unpacked）；
-5. 选择解压出的 `srt-ai-translator` 项目文件夹即可完成安装。
+1. **第一步：下载插件压缩包**  
+   👉 [**点击直接下载插件包 (ZIP)**](https://github.com/doge2mars/srt-ai-translator/archive/refs/heads/main.zip)（或点击页面右上角绿色 `Code` 按钮 -> `Download ZIP`）。
+2. **第二步：解压文件**  
+   下载完成后，双击解压该 `.zip` 压缩包，会得到一个名为 `srt-ai-translator-main` 的文件夹。
+3. **第三步：一键拖入浏览器**  
+   - 打开 **Chrome**、**Edge** 或 **360** 等浏览器；
+   - 地址栏直接输入并回车：`chrome://extensions/`（Edge 浏览器输入 `edge://extensions/`）；
+   - 打开右上角的 **「开发者模式」** 开关；
+   - 将刚才解压出的 `srt-ai-translator-main` 文件夹，**直接鼠标拖拽进浏览器窗口中**（或者点击左上角「加载已解压的扩展程序」选中该文件夹）。
+4. **安装完成！**  
+   去飞牛OS、YouTube 打开任意视频，页面上就会出现翻译控制条，自动开始翻译！
+
+---
+
+### 💻 开发者安装（Git 方式）
+
+```bash
+git clone https://github.com/doge2mars/srt-ai-translator.git
+```
+在浏览器扩展管理页点击「加载已解压的扩展程序」，选择该目录即可。
 
 ---
 
