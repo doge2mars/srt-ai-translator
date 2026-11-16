@@ -61,9 +61,15 @@ const els = {
   delModelBtn: document.getElementById('delModelBtn'),
   customModelGroup: document.getElementById('customModelGroup'),
   newModelBox: document.getElementById('newModelBox'),
-  newModelNameInput: document.getElementById('newModelNameInput'),
-  confirmAddModelBtn: document.getElementById('confirmAddModelBtn'),
+  newModelName: document.getElementById('newModelName'),
+  newModelBaseUrl: document.getElementById('newModelBaseUrl'),
+  newModelCode: document.getElementById('newModelCode'),
+  newModelApiKey: document.getElementById('newModelApiKey'),
+  testNewModelBtn: document.getElementById('testNewModelBtn'),
+  saveAndUseModelBtn: document.getElementById('saveAndUseModelBtn'),
+  saveOnlyModelBtn: document.getElementById('saveOnlyModelBtn'),
   cancelAddModelBtn: document.getElementById('cancelAddModelBtn'),
+  newModelTestResult: document.getElementById('newModelTestResult'),
   openStandaloneBtn: document.getElementById('openStandaloneBtn')
 };
 
@@ -271,52 +277,129 @@ els.provider.addEventListener('change', () => {
 
 // Custom Model CRUD handlers
 els.addModelBtn?.addEventListener('click', () => {
-  els.newModelBox.classList.remove('hidden');
-  els.newModelNameInput.value = '';
-  els.newModelNameInput.focus();
+  const isHidden = els.newModelBox.classList.contains('hidden');
+  if (isHidden) {
+    els.newModelBox.classList.remove('hidden');
+    els.newModelName.value = '';
+    els.newModelBaseUrl.value = 'https://';
+    els.newModelCode.value = '';
+    els.newModelApiKey.value = '';
+    els.newModelTestResult.className = 'msg';
+    els.newModelTestResult.textContent = '';
+    els.newModelName.focus();
+  } else {
+    els.newModelBox.classList.add('hidden');
+  }
 });
 
 els.cancelAddModelBtn?.addEventListener('click', () => {
   els.newModelBox.classList.add('hidden');
 });
 
-function handleCreateNewModel() {
-  const name = els.newModelNameInput.value.trim();
-  if (!name) {
-    alert('请输入模型配置名称，例如：通义千问、中转API');
-    els.newModelNameInput.focus();
+function showNewTestResult(text, isOk) {
+  if (!els.newModelTestResult) return;
+  if (isOk === null) {
+    els.newModelTestResult.className = 'msg';
+  } else {
+    els.newModelTestResult.className = isOk ? 'msg ok' : 'msg err';
+  }
+  els.newModelTestResult.textContent = text;
+}
+
+els.testNewModelBtn?.addEventListener('click', async () => {
+  const baseUrl = els.newModelBaseUrl.value.trim();
+  const model = els.newModelCode.value.trim();
+  const apiKey = els.newModelApiKey.value.trim();
+  const targetLang = els.targetLang.value || '简体中文';
+
+  if (!baseUrl) {
+    showNewTestResult('请先填写 API Base URL', false);
+    els.newModelBaseUrl.focus();
     return;
   }
+  if (!model) {
+    showNewTestResult('请先填写模型名称', false);
+    els.newModelCode.focus();
+    return;
+  }
+
+  showNewTestResult('正在测试连接此新配置...', null);
+  const res = await chrome.runtime.sendMessage({
+    type: 'TEST_CONNECTION',
+    settings: {
+      provider: 'custom',
+      baseUrl,
+      model,
+      apiKey,
+      targetLang
+    }
+  });
+
+  if (res && res.ok) {
+    showNewTestResult(`连接成功 (${res.latencyMs}ms): ${res.reply}`, true);
+  } else {
+    showNewTestResult(`连接失败: ${(res && res.error) || '未知错误'}`, false);
+  }
+});
+
+function collectNewModelData() {
+  const name = els.newModelName.value.trim();
+  const baseUrl = els.newModelBaseUrl.value.trim();
+  const model = els.newModelCode.value.trim();
+  const apiKey = els.newModelApiKey.value.trim();
+
+  if (!name) {
+    alert('请输入模型备注别名（例如：通义千问Plus、中转API）');
+    els.newModelName.focus();
+    return null;
+  }
   const id = `custom_${Date.now()}`;
-  const newMod = {
-    id,
-    name,
-    baseUrl: 'https://',
-    model: '',
-    apiKey: ''
-  };
+  return { id, name, baseUrl, model, apiKey };
+}
+
+// 选项 A：保存并立即使用（切换当前视频调用的模型）
+els.saveAndUseModelBtn?.addEventListener('click', () => {
+  const newMod = collectNewModelData();
+  if (!newMod) return;
+
   customModels.push(newMod);
+  providerProfiles[newMod.id] = {
+    baseUrl: newMod.baseUrl,
+    model: newMod.model,
+    apiKey: newMod.apiKey
+  };
   renderCustomModelOptions();
-  els.provider.value = id;
+
+  // 此时用户明确要求切换：切换并同步给播放器
+  els.provider.value = newMod.id;
   els.baseUrl.value = newMod.baseUrl;
   els.model.value = newMod.model;
   els.apiKey.value = newMod.apiKey;
-  saveCurrentProviderProfile();
-  els.newModelBox.classList.add('hidden');
   updateDeleteBtnVisibility();
+  els.newModelBox.classList.add('hidden');
+
+  saveAndSyncSettings(true);
+});
+
+// 选项 B：仅保存备用（绝对不修改当前正在跑的翻译引擎！）
+els.saveOnlyModelBtn?.addEventListener('click', () => {
+  const newMod = collectNewModelData();
+  if (!newMod) return;
+
+  customModels.push(newMod);
+  providerProfiles[newMod.id] = {
+    baseUrl: newMod.baseUrl,
+    model: newMod.model,
+    apiKey: newMod.apiKey
+  };
+  renderCustomModelOptions();
+
+  // 注意：保持 els.provider.value 原封不动！视频播放器继续使用当前旧模型翻译！
+  els.newModelBox.classList.add('hidden');
   saveAndSyncSettings(false);
-  els.baseUrl.focus();
-}
 
-els.confirmAddModelBtn?.addEventListener('click', handleCreateNewModel);
-
-els.newModelNameInput?.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    handleCreateNewModel();
-  } else if (e.key === 'Escape') {
-    els.newModelBox.classList.add('hidden');
-  }
+  els.testResult.className = 'msg ok';
+  els.testResult.textContent = `已添加模型「${newMod.name}」到列表备用，当前调用模型不受影响`;
 });
 
 els.delModelBtn?.addEventListener('click', () => {

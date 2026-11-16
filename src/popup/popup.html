@@ -68,13 +68,36 @@
         </select>
       </div>
 
-      <!-- 新建模型输入栏 -->
-      <div id="newModelBox" class="new-model-box hidden">
-        <input type="text" id="newModelNameInput" placeholder="输入模型名称（如：通义千问、中转API）" />
-        <div class="new-model-actions">
-          <button type="button" id="confirmAddModelBtn" class="btn btn-sm btn-primary">创建</button>
-          <button type="button" id="cancelAddModelBtn" class="btn btn-sm btn-secondary">取消</button>
+      <!-- 新建模型专用卡片（独立填写，完全不干扰当前调用的模型） -->
+      <div id="newModelBox" class="new-model-card hidden">
+        <div class="new-model-card-header">
+          <span>➕ 新建模型配置 (当前后台翻译不受影响)</span>
+          <button type="button" id="cancelAddModelBtn" class="action-btn">✕ 关闭</button>
         </div>
+        <div class="field">
+          <label for="newModelName">模型备注别名</label>
+          <input type="text" id="newModelName" placeholder="例如：通义千问Plus、中转API、Groq" />
+        </div>
+        <div class="field">
+          <label for="newModelBaseUrl">API Base URL</label>
+          <input type="text" id="newModelBaseUrl" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" />
+        </div>
+        <div class="row-2">
+          <div class="field">
+            <label for="newModelCode">模型名称</label>
+            <input type="text" id="newModelCode" placeholder="例如：qwen-plus" />
+          </div>
+          <div class="field">
+            <label for="newModelApiKey">API Key</label>
+            <input type="password" id="newModelApiKey" placeholder="sk-..." />
+          </div>
+        </div>
+        <div class="btn-row new-model-btns">
+          <button type="button" id="testNewModelBtn" class="btn btn-outline btn-sm">测试此配置</button>
+          <button type="button" id="saveAndUseModelBtn" class="btn btn-primary btn-sm">保存并立即使用</button>
+          <button type="button" id="saveOnlyModelBtn" class="btn btn-secondary btn-sm">仅保存备用</button>
+        </div>
+        <div id="newModelTestResult" class="msg"></div>
       </div>
 
       <div class="field">

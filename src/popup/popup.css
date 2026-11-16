@@ -172,29 +172,35 @@ h1 {
   color: #fca5a5;
 }
 
-.new-model-box {
+.new-model-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #090e17;
+  border: 1px solid #6366f1;
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.new-model-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #818cf8;
+}
+
+.new-model-btns {
   display: flex;
   gap: 6px;
-  background: #0f172a;
-  border: 1px dashed #6366f1;
-  padding: 6px 8px;
-  border-radius: 6px;
-  align-items: center;
-}
-
-.new-model-box input {
-  flex: 1;
-  padding: 4px 6px;
-  font-size: 11px;
-}
-
-.new-model-actions {
-  display: flex;
-  gap: 4px;
+  flex-wrap: wrap;
 }
 
 .btn-sm {
-  padding: 4px 8px;
+  padding: 5px 8px;
   font-size: 11px;
 }
 
