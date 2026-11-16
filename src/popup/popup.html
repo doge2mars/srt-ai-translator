@@ -37,16 +37,35 @@
     <section class="card">
       <h2>AI 模型配置</h2>
       <div class="field">
-        <label for="provider">服务预设</label>
+        <div class="field-header-row">
+          <label for="provider">服务预设</label>
+          <div class="provider-actions">
+            <button type="button" id="addModelBtn" class="action-btn" title="新建自定义模型配置">＋ 新建模型</button>
+            <button type="button" id="delModelBtn" class="action-btn danger hidden" title="删除当前选中的自定义配置">删除此配置</button>
+          </div>
+        </div>
         <select id="provider">
-          <option value="google_free">Google 免费翻译 (免 Key · 极速)</option>
-          <option value="ollama">Ollama (本地默认)</option>
-          <option value="lmstudio">LM Studio (本地)</option>
-          <option value="zhipu">智谱 GLM (在线)</option>
-          <option value="deepseek">DeepSeek (在线)</option>
-          <option value="openai">OpenAI (在线)</option>
-          <option value="custom">自定义 (OpenAI 兼容)</option>
+          <optgroup label="官方预设">
+            <option value="google_free">Google 免费翻译 (免 Key · 极速)</option>
+            <option value="zhipu">智谱 GLM (在线)</option>
+            <option value="deepseek">DeepSeek (在线)</option>
+            <option value="ollama">Ollama (本地默认)</option>
+            <option value="lmstudio">LM Studio (本地)</option>
+            <option value="openai">OpenAI (在线)</option>
+            <option value="custom">通用自定义 (OpenAI 兼容)</option>
+          </optgroup>
+          <optgroup id="customModelGroup" label="我的自定义模型" class="hidden">
+          </optgroup>
         </select>
+      </div>
+
+      <!-- 新建模型输入栏 -->
+      <div id="newModelBox" class="new-model-box hidden">
+        <input type="text" id="newModelNameInput" placeholder="输入模型名称（如：通义千问、中转API）" />
+        <div class="new-model-actions">
+          <button type="button" id="confirmAddModelBtn" class="btn btn-sm btn-primary">创建</button>
+          <button type="button" id="cancelAddModelBtn" class="btn btn-sm btn-secondary">取消</button>
+        </div>
       </div>
 
       <div class="field">

@@ -107,6 +107,72 @@ h1 {
   gap: 4px;
 }
 
+.field-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.provider-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.action-btn {
+  background: transparent;
+  border: none;
+  font-size: 11px;
+  color: #818cf8;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 4px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.action-btn:hover {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+}
+
+.action-btn.danger {
+  color: #f87171;
+}
+
+.action-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+}
+
+.new-model-box {
+  display: flex;
+  gap: 6px;
+  background: #0f172a;
+  border: 1px dashed #6366f1;
+  padding: 6px 8px;
+  border-radius: 6px;
+  align-items: center;
+}
+
+.new-model-box input {
+  flex: 1;
+  padding: 4px 6px;
+  font-size: 11px;
+}
+
+.new-model-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.btn-sm {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.hidden {
+  display: none !important;
+}
+
 .field label {
   font-size: 11px;
   color: #cbd5e1;

@@ -102,6 +102,12 @@ git clone https://github.com/doge2mars/srt-ai-translator.git
      ```
   3. 插件服务预设选择 `Ollama (本地默认)`，点击 **测试连接**。
 
+### 选项 D：多模型自定义管理（通义千问 / OneAPI中转 / 硅基流动等）
+* 点击「服务预设」右侧的 **「＋ 新建模型」**；
+* 输入自定义名称（如 `通义千问Plus`、`极速中转API`、`SiliconFlow`）；
+* 填写对应的 API Base URL（如千问的 `https://dashscope.aliyuncs.com/compatible-mode/v1`）、模型名称与 API Key；
+* 系统会自动独立保存每个模型的配置，随时在下拉菜单中一键切换或删除！
+
 ---
 
 ## 🎯 快捷键操作

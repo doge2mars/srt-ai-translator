@@ -14,7 +14,8 @@ const DEFAULT_SETTINGS = {
   autoDownloadSrt: false,
   domainPreset: 'general',
   customPrompt: '',
-  providerProfiles: {}
+  providerProfiles: {},
+  customModels: []
 };
 
 const DOMAIN_PROMPTS = {

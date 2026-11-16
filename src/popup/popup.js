@@ -56,19 +56,60 @@ const els = {
   pageStatusText: document.getElementById('pageStatusText'),
   pageSubSource: document.getElementById('pageSubSource'),
   clearCacheBtn: document.getElementById('clearCacheBtn'),
-  cacheMsg: document.getElementById('cacheMsg')
+  cacheMsg: document.getElementById('cacheMsg'),
+  addModelBtn: document.getElementById('addModelBtn'),
+  delModelBtn: document.getElementById('delModelBtn'),
+  customModelGroup: document.getElementById('customModelGroup'),
+  newModelBox: document.getElementById('newModelBox'),
+  newModelNameInput: document.getElementById('newModelNameInput'),
+  confirmAddModelBtn: document.getElementById('confirmAddModelBtn'),
+  cancelAddModelBtn: document.getElementById('cancelAddModelBtn')
 };
 
 let providerProfiles = {};
+let customModels = [];
+
+function renderCustomModelOptions() {
+  if (!els.customModelGroup) return;
+  els.customModelGroup.innerHTML = '';
+  if (customModels.length === 0) {
+    els.customModelGroup.classList.add('hidden');
+    return;
+  }
+  els.customModelGroup.classList.remove('hidden');
+  customModels.forEach((m) => {
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = `${m.name} (自定义)`;
+    els.customModelGroup.appendChild(opt);
+  });
+}
+
+function updateDeleteBtnVisibility() {
+  if (!els.delModelBtn) return;
+  const val = els.provider.value;
+  const isCustom = customModels.some((m) => m.id === val);
+  els.delModelBtn.classList.toggle('hidden', !isCustom);
+}
 
 function saveCurrentProviderProfile() {
   const p = els.provider.value;
   if (!p || p === 'google_free') return;
-  providerProfiles[p] = {
+  const profile = {
     baseUrl: els.baseUrl.value.trim(),
     apiKey: els.apiKey.value.trim(),
     model: els.model.value.trim()
   };
+  providerProfiles[p] = profile;
+
+  // Also sync to customModels array if it is a user-created model
+  const customIdx = customModels.findIndex((m) => m.id === p);
+  if (customIdx !== -1) {
+    customModels[customIdx] = {
+      ...customModels[customIdx],
+      ...profile
+    };
+  }
 }
 
 function collectSettingsFromUI() {
@@ -87,14 +128,24 @@ function collectSettingsFromUI() {
     fontSize: Number(els.fontSize.value) || 22,
     bottomOffset: Number(els.bottomOffset.value) || 48,
     autoDownloadSrt: !!els.autoDownloadSrt.checked,
-    providerProfiles
+    providerProfiles,
+    customModels
   };
 }
 
 function applySettingsToUI(s) {
   providerProfiles = { ...(s.providerProfiles || {}) };
+  customModels = Array.isArray(s.customModels) ? [...s.customModels] : [];
+  renderCustomModelOptions();
+
   els.enabled.checked = !!s.enabled;
   els.provider.value = s.provider || 'ollama';
+  // Fallback if saved provider no longer exists
+  if (!els.provider.value && els.provider.options.length > 0) {
+    els.provider.selectedIndex = 0;
+  }
+  updateDeleteBtnVisibility();
+
   els.baseUrl.value = s.baseUrl || '';
   els.apiKey.value = s.apiKey || '';
   els.model.value = s.model || '';
@@ -198,15 +249,88 @@ els.provider.addEventListener('change', () => {
   const nextProv = els.provider.value;
   const saved = providerProfiles[nextProv];
   const preset = PRESETS[nextProv];
+  const custom = customModels.find((m) => m.id === nextProv);
+
   if (saved) {
-    els.baseUrl.value = saved.baseUrl || (preset && preset.baseUrl) || '';
-    els.model.value = saved.model || (preset && preset.model) || '';
-    els.apiKey.value = saved.apiKey !== undefined ? saved.apiKey : (preset && preset.apiKey) || '';
+    els.baseUrl.value = saved.baseUrl || (custom && custom.baseUrl) || (preset && preset.baseUrl) || '';
+    els.model.value = saved.model || (custom && custom.model) || (preset && preset.model) || '';
+    els.apiKey.value = saved.apiKey !== undefined ? saved.apiKey : (custom && custom.apiKey) || (preset && preset.apiKey) || '';
+  } else if (custom) {
+    els.baseUrl.value = custom.baseUrl || '';
+    els.model.value = custom.model || '';
+    els.apiKey.value = custom.apiKey || '';
   } else if (preset) {
     els.baseUrl.value = preset.baseUrl;
     els.model.value = preset.model;
     if (preset.apiKey !== undefined) els.apiKey.value = preset.apiKey;
   }
+  updateDeleteBtnVisibility();
+  saveAndSyncSettings(false);
+});
+
+// Custom Model CRUD handlers
+els.addModelBtn?.addEventListener('click', () => {
+  els.newModelBox.classList.remove('hidden');
+  els.newModelNameInput.value = '';
+  els.newModelNameInput.focus();
+});
+
+els.cancelAddModelBtn?.addEventListener('click', () => {
+  els.newModelBox.classList.add('hidden');
+});
+
+function handleCreateNewModel() {
+  const name = els.newModelNameInput.value.trim();
+  if (!name) {
+    alert('请输入模型配置名称，例如：通义千问、中转API');
+    els.newModelNameInput.focus();
+    return;
+  }
+  const id = `custom_${Date.now()}`;
+  const newMod = {
+    id,
+    name,
+    baseUrl: 'https://',
+    model: '',
+    apiKey: ''
+  };
+  customModels.push(newMod);
+  renderCustomModelOptions();
+  els.provider.value = id;
+  els.baseUrl.value = newMod.baseUrl;
+  els.model.value = newMod.model;
+  els.apiKey.value = newMod.apiKey;
+  saveCurrentProviderProfile();
+  els.newModelBox.classList.add('hidden');
+  updateDeleteBtnVisibility();
+  saveAndSyncSettings(false);
+  els.baseUrl.focus();
+}
+
+els.confirmAddModelBtn?.addEventListener('click', handleCreateNewModel);
+
+els.newModelNameInput?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    handleCreateNewModel();
+  } else if (e.key === 'Escape') {
+    els.newModelBox.classList.add('hidden');
+  }
+});
+
+els.delModelBtn?.addEventListener('click', () => {
+  const currentId = els.provider.value;
+  const mod = customModels.find((m) => m.id === currentId);
+  if (!mod) return;
+  if (!confirm(`确定要删除自定义模型配置「${mod.name}」吗？`)) return;
+
+  customModels = customModels.filter((m) => m.id !== currentId);
+  delete providerProfiles[currentId];
+  renderCustomModelOptions();
+
+  // Switch back to zhipu or google_free
+  els.provider.value = 'zhipu';
+  els.provider.dispatchEvent(new Event('change'));
   saveAndSyncSettings(false);
 });
 
