@@ -155,7 +155,25 @@
     dropHint.className = 'srt-ai-drop-hint';
     dropHint.textContent = '松开鼠标以加载 SRT / VTT 字幕';
 
-    toolbar.append(statusEl, toggleBtn, modeBtn, minusBtn, offsetLabel, plusBtn, uploadBtn, exportBtn, fileInput);
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'srt-ai-btn srt-ai-btn-close';
+    closeBtn.textContent = '✕';
+    closeBtn.title = '收起控制条（按 Option+T 或将鼠标移至右上角可重新唤出）';
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      clearTimeout(state.hideTimer);
+      rootEl.classList.remove('show-toolbar');
+    });
+
+    toolbar.addEventListener('mouseenter', () => {
+      clearTimeout(state.hideTimer);
+      rootEl.classList.add('show-toolbar');
+    });
+    toolbar.addEventListener('mouseleave', () => {
+      showToolbarTemporarily(1200);
+    });
+
+    toolbar.append(statusEl, toggleBtn, modeBtn, minusBtn, offsetLabel, plusBtn, uploadBtn, exportBtn, closeBtn, fileInput);
     rootEl.append(subBoxEl, toolbar, dropHint);
 
     // Mouse drag support for subtitle position
@@ -285,10 +303,9 @@
         statusEl.title = state.lastError;
       }
     } else if (state.cues.length === 0) {
-      rootEl.classList.add('waiting-sub');
       statusEl.textContent = '等待 SRT 字幕';
+      statusEl.title = '可直接拖入 .srt 文件或等待播放器加载字幕';
     } else {
-      rootEl.classList.remove('waiting-sub');
       const doneCount = Object.keys(state.translations).length;
       const prefix = state.translating ? '翻译中' : '已就绪';
       statusEl.textContent = `${prefix} ${doneCount}/${state.cues.length}`;
@@ -296,13 +313,13 @@
     }
   }
 
-  function showToolbarTemporarily() {
+  function showToolbarTemporarily(delay = 2200) {
     if (!rootEl) return;
     rootEl.classList.add('show-toolbar');
     clearTimeout(state.hideTimer);
     state.hideTimer = setTimeout(() => {
       if (rootEl) rootEl.classList.remove('show-toolbar');
-    }, 2800);
+    }, delay);
   }
 
   function findPlayerContainer(video) {
@@ -358,7 +375,19 @@
     if (!host.__srtAiBound) {
       host.__srtAiBound = true;
       startDomSubtitleObserver(host);
-      host.addEventListener('mousemove', showToolbarTemporarily, { passive: true });
+      host.addEventListener(
+        'mousemove',
+        (e) => {
+          const rect = host.getBoundingClientRect();
+          const xFromRight = rect.right - e.clientX;
+          const yFromTop = e.clientY - rect.top;
+          // 仅当鼠标真正靠近右上角控制区 (宽 280px × 高 90px) 时才轻柔显现
+          if (xFromRight >= 0 && xFromRight <= 280 && yFromTop >= 0 && yFromTop <= 90) {
+            showToolbarTemporarily(2200);
+          }
+        },
+        { passive: true }
+      );
       host.addEventListener('dragover', (e) => {
         if (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes('Files')) {
           e.preventDefault();
@@ -881,6 +910,15 @@
     video.addEventListener('play', () => {
       renderCurrentCue();
       scheduleTranslation();
+      if (rootEl) {
+        clearTimeout(state.hideTimer);
+        state.hideTimer = setTimeout(() => {
+          if (rootEl) rootEl.classList.remove('show-toolbar');
+        }, 500);
+      }
+    });
+    video.addEventListener('pause', () => {
+      showToolbarTemporarily(3000);
     });
   }
 
