@@ -71,7 +71,21 @@
     return null;
   }
 
+  // HLS subtitle playlist (m3u8 listing .vtt segments) -> lets content script map segments onto the player timeline
+  function maybeEmitPlaylist(url, text) {
+    if (!text || typeof text !== 'string') return false;
+    const head = text.slice(0, 200).trimStart();
+    if (!head.startsWith('#EXTM3U')) return false;
+    if (!/#EXTINF/i.test(text) || !/\.(vtt|webvtt)(\?|\s|$)/im.test(text)) return false;
+    window.postMessage(
+      { source: 'srt-ai-interceptor', type: 'PLAYLIST_CAPTURED', url: url || '', content: text },
+      '*'
+    );
+    return true;
+  }
+
   function emitSubtitle(url, rawContent) {
+    if (maybeEmitPlaylist(url, rawContent)) return;
     const content = extractSubtitleFromPayload(rawContent);
     if (!content) return;
     window.postMessage(
@@ -95,6 +109,8 @@
         const ct = (response.headers && response.headers.get('content-type')) || '';
         const mightBeSub =
           isSubtitleUrl(reqUrl) ||
+          /mpegurl/i.test(ct) ||
+          /\.m3u8(\?|$)/i.test(reqUrl) ||
           ct.includes('text/vtt') ||
           ct.includes('application/x-subrip') ||
           ct.includes('text/srt') ||
@@ -129,12 +145,14 @@
         const url = this.__srtAiUrl || '';
         if (this.responseType === '' || this.responseType === 'text') {
           const text = this.responseText;
+          if (maybeEmitPlaylist(url, text)) return;
           if (isSubtitleUrl(url) || looksLikeSubtitleText(text)) {
             emitSubtitle(url, text);
           }
         } else if (this.responseType === 'arraybuffer' && this.response instanceof ArrayBuffer) {
           if (isSubtitleUrl(url) || this.response.byteLength < 2 * 1024 * 1024) {
             const text = new TextDecoder('utf-8').decode(this.response);
+            if (maybeEmitPlaylist(url, text)) return;
             if (isSubtitleUrl(url) || looksLikeSubtitleText(text)) {
               emitSubtitle(url, text);
             }
@@ -142,6 +160,7 @@
         } else if (this.responseType === 'blob' && this.response instanceof Blob) {
           if (isSubtitleUrl(url) || this.response.size < 2 * 1024 * 1024) {
             this.response.text().then((text) => {
+              if (maybeEmitPlaylist(url, text)) return;
               if (isSubtitleUrl(url) || looksLikeSubtitleText(text)) {
                 emitSubtitle(url, text);
               }

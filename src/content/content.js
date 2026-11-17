@@ -36,7 +36,7 @@
     subtitleLoadedAt: 0,
     lastPageUrl: location.href,
     lastVideoSrc: '',
-    streamBasePts: null,
+    hls: { segments: new Map(), playlist: new Map(), playlists: [], lastRawHead: '' },
     diag: { interceptorHits: [], monitorUrls: [] }
   };
 
@@ -418,87 +418,192 @@
     reader.readAsText(file, 'utf-8');
   }
 
+  // ---------------- HLS segmented subtitles (Disney+ etc.) ----------------
+  // Each pts_XXXX.vtt is stored with cue times in the *media* (PTS) domain. Its position on the
+  // player timeline (video.currentTime) comes from the subtitle m3u8 playlist (sum of #EXTINF).
+  function handleSubtitleSegment(rawClean, subUrl) {
+    const key = Parser.segmentKey(subUrl) || `inline-${Date.now()}`;
+    const ptsM = (subUrl || '').match(/pts_(\d+)/i);
+    let segPts = null;
+    let relative = false;
+    let firstRaw = null;
+    let cues;
+    if (ptsM) {
+      segPts = parseInt(ptsM[1], 10) / 1000;
+      const raw = Parser.parseSubtitle(rawClean, {});
+      if (!raw || raw.length === 0) return;
+      firstRaw = raw[0].start;
+      // Cue times either already absolute PTS (00:07:08.845 for pts_428845) or relative to segment start
+      relative = firstRaw < segPts - 1;
+      cues = raw.map((c) => ({
+        start: relative ? c.start + segPts : c.start,
+        end: relative ? c.end + segPts : c.end,
+        text: c.text
+      }));
+    } else {
+      cues = Parser.parseSubtitle(rawClean, { url: subUrl });
+      if (!cues || cues.length === 0) return;
+    }
+    state.hls.lastRawHead = (rawClean || '').slice(0, 220);
+    state.hls.segments.set(key, {
+      key,
+      track: key.includes('/') ? key.split('/')[0] : '',
+      segPts,
+      relative,
+      firstRaw,
+      cues,
+      at: Date.now()
+    });
+    rebuildFromSegments();
+  }
+
+  function pickActiveTrack() {
+    const byTrack = new Map();
+    for (const seg of state.hls.segments.values()) {
+      const t = byTrack.get(seg.track) || { count: 0, last: 0 };
+      t.count += 1;
+      t.last = Math.max(t.last, seg.at);
+      byTrack.set(seg.track, t);
+    }
+    let best = null;
+    let bestVal = null;
+    for (const [track, v] of byTrack) {
+      if (!bestVal || v.count > bestVal.count || (v.count === bestVal.count && v.last > bestVal.last)) {
+        best = track;
+        bestVal = v;
+      }
+    }
+    return best;
+  }
+
+  function segmentOffset(seg) {
+    const entry = state.hls.playlist.get(seg.key);
+    if (entry && seg.segPts !== null) return { offset: entry.start - seg.segPts, mapped: true, entry };
+    return { offset: 0, mapped: false, entry: null };
+  }
+
+  function rebuildFromSegments() {
+    const track = pickActiveTrack();
+    const textMap = new Map();
+    state.cues.forEach((c) => {
+      if (state.translations[c.id]) textMap.set(c.text, state.translations[c.id]);
+    });
+
+    const seen = new Set();
+    const cues = [];
+    let mappedCount = 0;
+    let segCount = 0;
+    for (const seg of state.hls.segments.values()) {
+      if (seg.track !== track) continue;
+      segCount += 1;
+      const { offset, mapped } = segmentOffset(seg);
+      if (mapped) mappedCount += 1;
+      for (const c of seg.cues) {
+        const start = c.start + offset;
+        const end = c.end + offset;
+        const sig = `${Math.round(start * 10)}_${c.text}`;
+        if (seen.has(sig)) continue;
+        seen.add(sig);
+        cues.push({ start, end, text: c.text });
+      }
+    }
+    cues.sort((a, b) => a.start - b.start);
+    const translations = {};
+    cues.forEach((c, idx) => {
+      c.id = idx;
+      if (textMap.has(c.text)) translations[idx] = textMap.get(c.text);
+    });
+
+    const prevCount = state.cues.length;
+    state.cues = cues;
+    state.translations = translations;
+    state.failCount = {};
+    state.activeCueId = -1;
+    const alignNote = mappedCount === segCount && segCount > 0 ? '已按播放列表对齐' : mappedCount > 0 ? `部分对齐 ${mappedCount}/${segCount}` : '未对齐(无播放列表)';
+    state.subtitleSource = `自动捕获: 分段流 (${cues.length}条, ${alignNote})`;
+    state.subtitleLoadedAt = Date.now();
+    updateToolbarUI();
+    renderCurrentCue();
+    if (cues.length !== prevCount || Object.keys(translations).length < cues.length) {
+      scheduleTranslation();
+    }
+  }
+
+  function handleSubtitlePlaylist(text, url) {
+    const entries = Parser.parseHlsPlaylist(text, url).filter((e) => /\.(vtt|webvtt)$/i.test(e.key));
+    if (entries.length === 0) return false;
+    for (const e of entries) state.hls.playlist.set(e.key, e);
+    const tail = (url || '').split('?')[0].split('/').slice(-2).join('/');
+    if (!state.hls.playlists.some((p) => p.url === tail)) {
+      state.hls.playlists.push({
+        url: tail,
+        segments: entries.length,
+        total: Math.round(entries[entries.length - 1].start + entries[entries.length - 1].duration),
+        head: entries.slice(0, 4).map((e) => `${e.key.split('/').pop()}@${e.start.toFixed(3)}+${e.duration}`)
+      });
+      if (state.hls.playlists.length > 6) state.hls.playlists.shift();
+    }
+    if (state.hls.segments.size > 0) rebuildFromSegments();
+    return true;
+  }
+
+  const triedPlaylists = new Set();
+  async function tryLoadPlaylistUrl(url) {
+    if (!url || triedPlaylists.has(url)) return;
+    triedPlaylists.add(url);
+    let text = '';
+    try {
+      const r = await fetch(url, { credentials: 'include' });
+      if (r.ok) text = await r.text();
+    } catch (_) {}
+    if (!text) {
+      try {
+        const res = await chrome.runtime.sendMessage({ type: 'FETCH_TEXT', url });
+        if (res && res.ok) text = res.text;
+      } catch (_) {}
+    }
+    if (text && /^\s*#EXTM3U/.test(text) && /#EXTINF/.test(text)) handleSubtitlePlaylist(text, url);
+  }
+
+  function collectHlsDiag() {
+    const out = {
+      playlists: state.hls.playlists,
+      playlistEntries: state.hls.playlist.size,
+      activeTrack: pickActiveTrack(),
+      lastRawHead: state.hls.lastRawHead,
+      segments: []
+    };
+    for (const seg of state.hls.segments.values()) {
+      const { offset, mapped, entry } = segmentOffset(seg);
+      out.segments.push({
+        key: seg.key.split('/').pop(),
+        track: (seg.track || '').slice(0, 8),
+        segPts: seg.segPts,
+        firstRaw: seg.firstRaw,
+        relative: seg.relative,
+        cues: seg.cues.length,
+        mapped,
+        timelineStart: entry ? Math.round(entry.start * 1000) / 1000 : null,
+        offset: Math.round(offset * 1000) / 1000
+      });
+    }
+    return out;
+  }
+
   async function loadSubtitleContent(rawText, sourceLabel, subUrl = '') {
     const rawClean = Parser.extractSubtitleText(rawText) || rawText;
 
-    // Detect segmented HLS/DASH WebVTT chunks (e.g., Disney+ pts_xxx.vtt, Apple TV, etc.)
+    // Segmented HLS WebVTT (Disney+ pts_xxx.vtt, Apple TV, etc.) -> dedicated segment pipeline
     const isChunk =
       /(pts_\d+|seg(ment)?[-_]?\d+|frag[-_]?\d+|\/subs?\/chunk)/i.test(subUrl) ||
       /X-TIMESTAMP-MAP/i.test(rawText);
-
     if (isChunk) {
-      const ptsMatch = (subUrl || '').match(/pts_(\d+)/i);
-      let chunkPts = ptsMatch ? parseInt(ptsMatch[1], 10) / 1000 : 0;
-      if (!chunkPts) {
-        const mpegMatch = (rawClean || '').match(/MPEGTS:(\d+)/i);
-        if (mpegMatch) chunkPts = parseInt(mpegMatch[1], 10) / 90000;
-      }
-
-      if (state.streamBasePts === null && chunkPts > 0) {
-        const curTime = state.video ? state.video.currentTime : 0;
-        if (chunkPts > 30) {
-          // If video is within the first 5 minutes (or 300s), this chunk corresponds to the stream start
-          if (curTime < 300) {
-            state.streamBasePts = chunkPts;
-          } else {
-            // Seeked / resumed mid-video: estimate stream's base PTS
-            state.streamBasePts = Math.max(0, chunkPts - curTime);
-          }
-        } else {
-          state.streamBasePts = 0;
-        }
-
-        // Retroactively adjust any previously loaded cues if needed
-        if (state.cues.length > 0 && state.streamBasePts > 30 && state.cues[0].start >= state.streamBasePts - 10) {
-          const offset = state.streamBasePts;
-          state.cues.forEach((c) => {
-            c.start = Math.max(0, c.start - offset);
-            c.end = Math.max(0, c.end - offset);
-          });
-        }
-      }
-    }
-
-    const newCues = Parser.parseSubtitle(rawClean, { url: subUrl, basePts: state.streamBasePts });
-    if (!newCues || newCues.length === 0) return;
-
-    // Failsafe PTS normalization: if cues start far ahead of video currentTime (> 30s ahead while playback is < 300s)
-    if (isChunk && newCues.length > 0 && state.video && state.video.currentTime < 300) {
-      if (newCues[0].start > 30 && newCues[0].start > state.video.currentTime + 30) {
-        const offset = newCues[0].start;
-        state.streamBasePts = (state.streamBasePts || 0) + offset;
-        newCues.forEach((c) => {
-          c.start = Math.max(0, c.start - offset);
-          c.end = Math.max(0, c.end - offset);
-        });
-        if (state.cues.length > 0) {
-          state.cues.forEach((c) => {
-            c.start = Math.max(0, c.start - offset);
-            c.end = Math.max(0, c.end - offset);
-          });
-        }
-      }
-    }
-
-    if (isChunk && state.cues.length > 0) {
-      // Incrementally merge new chunk into existing cues without wiping out earlier/later cues
-      const prevCount = state.cues.length;
-      const { cues: mergedCues, translations: mergedTrans } = Parser.mergeCues(
-        state.cues,
-        newCues,
-        state.translations
-      );
-      state.cues = mergedCues;
-      state.translations = mergedTrans;
-      state.subtitleSource = `自动捕获: 分段流 (${mergedCues.length}条)`;
-      state.subtitleLoadedAt = Date.now();
-      updateToolbarUI();
-      renderCurrentCue();
-      if (mergedCues.length > prevCount) {
-        scheduleTranslation();
-      }
+      handleSubtitleSegment(rawClean, subUrl);
       return;
     }
+
+    const newCues = Parser.parseSubtitle(rawClean, { url: subUrl });
+    if (!newCues || newCues.length === 0) return;
 
     const hash = Parser.hashString(rawClean.slice(0, 8192) + ':' + newCues.length);
     if (hash === state.subtitleHash && state.cues.length > 0) {
@@ -862,7 +967,11 @@
   function findPrimaryVideo() {
     const videos = collectVideosDeep(document);
     if (videos.length === 0) return null;
+    // Prefer a video that actually has media loaded / is playing, then the largest one
+    const score = (x) => (x.readyState >= 2 ? 2 : 0) + (!x.paused ? 1 : 0);
     videos.sort((a, b) => {
+      const ds = score(b) - score(a);
+      if (ds !== 0) return ds;
       const ra = a.getBoundingClientRect();
       const rb = b.getBoundingClientRect();
       return rb.width * rb.height - ra.width * ra.height;
@@ -942,7 +1051,7 @@
     state.failCount = {};
     state.lastError = '';
     state.activeCueId = -1;
-    state.streamBasePts = null;
+    state.hls = { segments: new Map(), playlist: new Map(), playlists: [], lastRawHead: '' };
     domSub.lastText = '';
     updateToolbarUI();
     renderCurrentCue();
@@ -1020,6 +1129,11 @@
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     const data = event.data;
+    if (data && data.source === 'srt-ai-interceptor' && data.type === 'PLAYLIST_CAPTURED') {
+      if (data.url) triedPlaylists.add(data.url);
+      handleSubtitlePlaylist(data.content, data.url || location.href);
+      return;
+    }
     if (data && data.source === 'srt-ai-interceptor' && data.type === 'SUBTITLE_CAPTURED') {
       if (!state.video && !findPrimaryVideo()) return;
       if (!isMatchingYouTubeVideo(data.url)) return;
@@ -1076,7 +1190,28 @@
       const r = v.getBoundingClientRect();
       info.currentTime = Math.round(v.currentTime * 100) / 100;
       info.paused = v.paused;
-      info.duration = Math.round((v.duration || 0) * 100) / 100;
+      info.duration = Number.isFinite(v.duration) ? Math.round(v.duration * 100) / 100 : String(v.duration);
+      const ranges = (tr) => {
+        const out = [];
+        try {
+          for (let i = 0; i < tr.length && i < 6; i++) out.push(`${tr.start(i).toFixed(2)}-${tr.end(i).toFixed(2)}`);
+        } catch (_) {}
+        return out;
+      };
+      info.buffered = ranges(v.buffered);
+      info.seekable = ranges(v.seekable);
+      info.allVideos = collectVideosDeep(document).map((x) => {
+        const rr = x.getBoundingClientRect();
+        return {
+          picked: x === v,
+          id: x.id || '',
+          size: `${Math.round(rr.width)}x${Math.round(rr.height)}`,
+          t: Math.round(x.currentTime * 100) / 100,
+          dur: Number.isFinite(x.duration) ? Math.round(x.duration) : String(x.duration),
+          paused: x.paused,
+          ready: x.readyState
+        };
+      });
       info.video = {
         size: `${Math.round(r.width)}x${Math.round(r.height)}`,
         src: (v.currentSrc || v.src || '').slice(0, 160),
@@ -1114,7 +1249,7 @@
       }
     }
     info.activeCueId = state.activeCueId;
-    info.streamBasePts = state.streamBasePts;
+    info.hls = collectHlsDiag();
     info.cuesTotal = state.cues.length;
     if (state.cues.length > 0) {
       info.cueRange = {
@@ -1127,6 +1262,12 @@
       };
       if (v) {
         const curIdx = Parser.findCueIndexAtTime(state.cues, v.currentTime);
+        const t = v.currentTime - (state.settings.timeOffset || 0);
+        const nextIdx = Parser.findNextCueIndex(state.cues, t);
+        info.nearCues = state.cues
+          .slice(Math.max(0, nextIdx - 2), nextIdx + 2)
+          .map((c) => `${c.start.toFixed(2)}-${c.end.toFixed(2)} ${c.text.slice(0, 30)}`);
+        info.userTimeOffset = state.settings.timeOffset || 0;
         info.activeCueMatch = curIdx !== -1 ? {
           idx: curIdx,
           start: state.cues[curIdx].start,
@@ -1180,6 +1321,8 @@
     } else if (message?.type === 'EXPORT_SRT') {
       const res = downloadTranslatedSrt(message.mode);
       sendResponse(res);
+    } else if (message?.type === 'PLAYLIST_URL_SEEN') {
+      tryLoadPlaylistUrl(message.url);
     } else if (message?.type === 'SUBTITLE_URL_SEEN') {
       tryLoadSubtitleUrl(message.url);
     } else if (message?.type === 'GET_PAGE_STATUS') {

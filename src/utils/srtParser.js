@@ -237,11 +237,6 @@
       }
     }
 
-    // Subtract stream initial PTS if provided (HLS elementary stream epoch normalization)
-    if (options && typeof options.basePts === 'number' && options.basePts > 0) {
-      timeOffset = Math.max(0, timeOffset - options.basePts);
-    }
-
     const normalized = content.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const blocks = normalized.split(/\n{2,}/);
     const cues = [];
@@ -299,17 +294,6 @@
         cues.forEach((c) => {
           c.start += timeOffset;
           c.end += timeOffset;
-        });
-      }
-    }
-
-    // Normalize absolute timestamps if raw WebVTT cues already contain base PTS (e.g. 00:07:08.845)
-    if (options && typeof options.basePts === 'number' && options.basePts > 0 && cues.length > 0) {
-      if (cues[0].start >= options.basePts - 10) {
-        const bp = options.basePts;
-        cues.forEach((c) => {
-          c.start = Math.max(0, c.start - bp);
-          c.end = Math.max(0, c.end - bp);
         });
       }
     }
@@ -471,8 +455,52 @@
     return { cues: merged, translations: finalTranslations };
   }
 
+  /**
+   * Key used to match a subtitle segment URL against an HLS playlist entry:
+   * last two path components without query (e.g. "<track-uuid>/pts_428845.vtt").
+   */
+  function segmentKey(url) {
+    if (!url || typeof url !== 'string') return '';
+    const path = url.split('#')[0].split('?')[0];
+    const parts = path.split('/').filter(Boolean);
+    return parts.slice(-2).join('/');
+  }
+
+  /**
+   * Parse an HLS media playlist. Returns segments with their position on the player timeline
+   * (sum of preceding #EXTINF durations), which is what video.currentTime is measured against.
+   */
+  function parseHlsPlaylist(text, baseUrl) {
+    const out = [];
+    if (!text || !/^\s*#EXTM3U/.test(text)) return out;
+    const lines = text.replace(/\r/g, '').split('\n');
+    let t = 0;
+    let pendingDur = null;
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (line.startsWith('#EXTINF')) {
+        const m = line.match(/#EXTINF:\s*([\d.]+)/i);
+        pendingDur = m ? parseFloat(m[1]) : 0;
+        continue;
+      }
+      if (line.startsWith('#')) continue;
+      if (pendingDur === null) continue;
+      let abs = line;
+      try {
+        abs = new URL(line, baseUrl || undefined).href;
+      } catch (_) {}
+      out.push({ key: segmentKey(abs), uri: abs, start: t, duration: pendingDur });
+      t += pendingDur;
+      pendingDur = null;
+    }
+    return out;
+  }
+
   global.SrtParser = {
     parseSubtitle,
+    parseHlsPlaylist,
+    segmentKey,
     looksLikeSubtitle,
     extractSubtitleText,
     findCueIndexAtTime,

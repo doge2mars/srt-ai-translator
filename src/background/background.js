@@ -452,6 +452,12 @@ if (typeof chrome !== 'undefined' && chrome.webRequest && chrome.webRequest.onCo
 
       if (d.statusCode >= 200 && d.statusCode < 300 && isSubtitleCandidate(d.url, d.type, ct)) {
         chrome.tabs.sendMessage(d.tabId, { type: 'SUBTITLE_URL_SEEN', url: d.url }).catch(() => {});
+      } else if (
+        d.statusCode >= 200 && d.statusCode < 300 &&
+        (/mpegurl/i.test(ct) || /\.m3u8(\?|$)/i.test(d.url))
+      ) {
+        // HLS playlists: content script checks whether it is a subtitle playlist (for timeline mapping)
+        chrome.tabs.sendMessage(d.tabId, { type: 'PLAYLIST_URL_SEEN', url: d.url }).catch(() => {});
       }
     },
     { urls: ['<all_urls>'] },
