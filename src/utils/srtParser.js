@@ -204,7 +204,7 @@
     return looksLikeSubtitle(raw) ? raw : null;
   }
 
-  function parseSubtitle(content) {
+  function parseSubtitle(content, options = {}) {
     if (!content || typeof content !== 'string') return [];
     const trimmed = content.trim();
     if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
@@ -215,6 +215,25 @@
     }
     if (isYouTubeXml(content)) return parseYouTubeXml(content);
     if (isAss(content)) return parseAss(content);
+
+    // HLS WebVTT X-TIMESTAMP-MAP or URL PTS detection
+    let timeOffset = 0;
+    const tsMapMatch = content.match(/X-TIMESTAMP-MAP\s*=\s*([^\r\n]+)/i);
+    if (tsMapMatch) {
+      const mapStr = tsMapMatch[1];
+      const localMatch = mapStr.match(/LOCAL:([0-9:.]+)/i);
+      const mpegMatch = mapStr.match(/MPEGTS:(\d+)/i);
+      if (localMatch && mpegMatch) {
+        const localSec = parseTimestamp(localMatch[1] || '0');
+        const mpegSec = parseInt(mpegMatch[1], 10) / 90000;
+        timeOffset = mpegSec - localSec;
+      }
+    } else if (options && typeof options.url === 'string') {
+      const ptsMatch = options.url.match(/pts_(\d+)/i);
+      if (ptsMatch) {
+        timeOffset = parseInt(ptsMatch[1], 10) / 90000;
+      }
+    }
 
     const normalized = content.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const blocks = normalized.split(/\n{2,}/);
@@ -251,12 +270,18 @@
       // VTT can have cue settings after end timestamp (e.g., "00:01:00.000 align:start")
       const endPart = timeLine.slice(arrowIdx + 3).trim().split(/\s+/)[0];
 
-      const start = parseTimestamp(startStr);
-      const end = parseTimestamp(endPart);
+      let start = parseTimestamp(startStr);
+      let end = parseTimestamp(endPart);
       if (Number.isNaN(start) || Number.isNaN(end) || end <= start) continue;
 
       const text = cleanSubtitleText(lines.slice(timeLineIdx + 1).join('\n'));
       if (!text) continue;
+
+      // Apply HLS WebVTT PTS offset if cues are relative to chunk
+      if (timeOffset > 0 && start < 120 && timeOffset > 10) {
+        start += timeOffset;
+        end += timeOffset;
+      }
 
       cues.push({
         id: cues.length,
@@ -377,6 +402,52 @@
     return blocks.join('\n\n') + '\n';
   }
 
+  function mergeCues(existingCues, newCues, existingTranslations = {}) {
+    if (!existingCues || existingCues.length === 0) {
+      return { cues: newCues || [], translations: existingTranslations || {} };
+    }
+    if (!newCues || newCues.length === 0) {
+      return { cues: existingCues, translations: existingTranslations };
+    }
+
+    // Map existing translations by exact text and timestamp signature
+    const transMap = new Map();
+    for (const c of existingCues) {
+      if (existingTranslations[c.id]) {
+        transMap.set(`${Math.round(c.start * 10) / 10}_${c.text}`, existingTranslations[c.id]);
+        transMap.set(c.text, existingTranslations[c.id]);
+      }
+    }
+
+    const merged = [...existingCues];
+    for (const nc of newCues) {
+      // Check if duplicate already exists (overlap in time + same text)
+      const exists = merged.some(
+        (ec) => Math.abs(ec.start - nc.start) < 0.6 && ec.text === nc.text
+      );
+      if (!exists) {
+        merged.push({ start: nc.start, end: nc.end, text: nc.text });
+      }
+    }
+
+    // Sort all merged cues by start time
+    merged.sort((a, b) => a.start - b.start);
+
+    // Re-index continuous IDs and restore translations
+    const finalTranslations = {};
+    merged.forEach((c, idx) => {
+      c.id = idx;
+      const keyExact = `${Math.round(c.start * 10) / 10}_${c.text}`;
+      if (transMap.has(keyExact)) {
+        finalTranslations[idx] = transMap.get(keyExact);
+      } else if (transMap.has(c.text)) {
+        finalTranslations[idx] = transMap.get(c.text);
+      }
+    });
+
+    return { cues: merged, translations: finalTranslations };
+  }
+
   global.SrtParser = {
     parseSubtitle,
     looksLikeSubtitle,
@@ -385,6 +456,7 @@
     findNextCueIndex,
     hashString,
     formatSrtTimestamp,
-    exportSrt
+    exportSrt,
+    mergeCues
   };
 })(window);

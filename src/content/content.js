@@ -325,12 +325,10 @@
   function findPlayerContainer(video) {
     const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
 
-    // Known player root containers (YouTube #movie_player, fnOS xgplayer, Bilibili, etc.)
+    // Known player root containers (YouTube #movie_player, fnOS xgplayer, Disney+, Bilibili, etc.)
     // Use `known` even in fullscreen as long as it is inside (or is) the fullscreen element!
-    // (On YouTube, document.fullscreenElement is <ytd-app> which is 3000px tall with comments,
-    // whereas #movie_player is the actual 100vw x 100vh video screen!)
     const known = video.closest(
-      '#movie_player, .html5-video-player, .xgplayer, .bpx-player-video-area, .dplayer, .artplayer-app, .plyr'
+      '#movie_player, .html5-video-player, .xgplayer, .bpx-player-video-area, .dplayer, .artplayer-app, .plyr, disney-web-player, .btm-media-player, .btm-media-client, [data-testid="web-player"]'
     );
     if (known && (!fsEl || fsEl.contains(known))) {
       return known;
@@ -419,16 +417,42 @@
     reader.readAsText(file, 'utf-8');
   }
 
-  async function loadSubtitleContent(rawText, sourceLabel) {
-    const cues = Parser.parseSubtitle(Parser.extractSubtitleText(rawText) || rawText);
-    if (cues.length === 0) return;
+  async function loadSubtitleContent(rawText, sourceLabel, subUrl = '') {
+    const rawClean = Parser.extractSubtitleText(rawText) || rawText;
+    const newCues = Parser.parseSubtitle(rawClean, { url: subUrl });
+    if (!newCues || newCues.length === 0) return;
 
-    const hash = Parser.hashString(rawText.slice(0, 8192) + ':' + cues.length);
+    // Detect segmented HLS/DASH WebVTT chunks (e.g., Disney+ pts_xxx.vtt, Apple TV, etc.)
+    const isChunk =
+      /(pts_\d+|seg(ment)?[-_]?\d+|frag[-_]?\d+|\/subs?\/chunk)/i.test(subUrl) ||
+      /X-TIMESTAMP-MAP/i.test(rawText);
+
+    if (isChunk && state.cues.length > 0) {
+      // Incrementally merge new chunk into existing cues without wiping out earlier/later cues
+      const prevCount = state.cues.length;
+      const { cues: mergedCues, translations: mergedTrans } = Parser.mergeCues(
+        state.cues,
+        newCues,
+        state.translations
+      );
+      state.cues = mergedCues;
+      state.translations = mergedTrans;
+      state.subtitleSource = `自动捕获: 分段流 (${mergedCues.length}条)`;
+      state.subtitleLoadedAt = Date.now();
+      updateToolbarUI();
+      renderCurrentCue();
+      if (mergedCues.length > prevCount) {
+        scheduleTranslation();
+      }
+      return;
+    }
+
+    const hash = Parser.hashString(rawClean.slice(0, 8192) + ':' + newCues.length);
     if (hash === state.subtitleHash && state.cues.length > 0) {
       return; // Same subtitle already loaded
     }
 
-    state.cues = cues;
+    state.cues = newCues;
     state.subtitleHash = hash;
     state.subtitleSource = sourceLabel || '自动捕获';
     state.subtitleLoadedAt = Date.now();
@@ -947,7 +971,7 @@
       if (!isMatchingYouTubeVideo(data.url)) return;
       const fileName = (data.url || '').split('?')[0].split('/').pop() || '网络捕获';
       state.diag.interceptorHits.push(data.url || '(inline)');
-      loadSubtitleContent(data.content, `自动捕获: ${fileName}`);
+      loadSubtitleContent(data.content, `自动捕获: ${fileName}`, data.url || '');
     }
   });
 
@@ -981,7 +1005,7 @@
     if (sub) {
       entry.result = 'OK';
       const fileName = decodeURIComponent(url.split('?')[0].split('/').pop() || '网络捕获');
-      loadSubtitleContent(sub, `自动捕获: ${fileName}`);
+      loadSubtitleContent(sub, `自动捕获: ${fileName}`, url);
     }
   }
 

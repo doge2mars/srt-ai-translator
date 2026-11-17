@@ -153,13 +153,18 @@
   display: flex;
 }
 
-/* Hide YouTube & fnOS (xgplayer) native caption box (never hide our own .srt-ai-* elements) */
+/* Hide YouTube, fnOS, Disney+ native caption box (never hide our own .srt-ai-* elements) */
 .html5-video-player:has(.srt-ai-overlay-root.has-cues) .ytp-caption-window-container,
 .xgplayer:has(.srt-ai-overlay-root.has-cues) .xgplayer-subtitles:not([class*="srt-ai"]),
 .xgplayer:has(.srt-ai-overlay-root.has-cues) .xgplayer-subtitle:not([class*="srt-ai"]),
 .xgplayer:has(.srt-ai-overlay-root.has-cues) [class*="xgplayer-text-track"]:not([class*="srt-ai"]),
 .xgplayer:has(.srt-ai-overlay-root.has-cues) [class*="xgplayer-subtitles"]:not([class*="srt-ai"]),
-[class*="trim-mc"]:has(.srt-ai-overlay-root.has-cues) [class*="xg-subtitles"]:not([class*="srt-ai"]) {
+[class*="trim-mc"]:has(.srt-ai-overlay-root.has-cues) [class*="xg-subtitles"]:not([class*="srt-ai"]),
+disney-web-player:has(.srt-ai-overlay-root.has-cues) [class*="subtitle"]:not([class*="srt-ai"]),
+disney-web-player:has(.srt-ai-overlay-root.has-cues) [class*="caption"]:not([class*="srt-ai"]),
+.btm-media-player:has(.srt-ai-overlay-root.has-cues) [class*="subtitle"]:not([class*="srt-ai"]),
+.btm-media-player:has(.srt-ai-overlay-root.has-cues) [class*="caption"]:not([class*="srt-ai"]),
+.hive-subtitles {
   opacity: 0 !important;
   pointer-events: none !important;
 }
