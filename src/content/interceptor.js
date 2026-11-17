@@ -99,6 +99,36 @@
     );
   }
 
+  function emitAudioPts(url) {
+    if (!url || typeof url !== 'string') return;
+    const m = url.match(/\/pts_(\d+)\.mp4a(\?|$)/i);
+    if (!m) return;
+    const ptsSec = parseInt(m[1], 10) / 48000;
+    window.postMessage(
+      { source: 'srt-ai-interceptor', type: 'MEDIA_PTS', audioPts: ptsSec },
+      '*'
+    );
+  }
+
+  // Hook SourceBuffer.appendBuffer to capture MSE timestampOffset (used by HivePlayer/Disney+ when duration is Infinity)
+  if (typeof SourceBuffer !== 'undefined' && SourceBuffer.prototype && SourceBuffer.prototype.appendBuffer) {
+    let lastReportedOffset = null;
+    const origAppend = SourceBuffer.prototype.appendBuffer;
+    SourceBuffer.prototype.appendBuffer = function (...args) {
+      try {
+        const off = this.timestampOffset;
+        if (typeof off === 'number' && Number.isFinite(off) && off !== lastReportedOffset) {
+          lastReportedOffset = off;
+          window.postMessage(
+            { source: 'srt-ai-interceptor', type: 'MSE_OFFSET', timestampOffset: off },
+            '*'
+          );
+        }
+      } catch (_) {}
+      return origAppend.apply(this, args);
+    };
+  }
+
   // Hook window.fetch
   const origFetch = window.fetch;
   if (typeof origFetch === 'function') {
@@ -106,6 +136,7 @@
       const response = await origFetch.apply(this, args);
       try {
         const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+        emitAudioPts(reqUrl);
         const ct = (response.headers && response.headers.get('content-type')) || '';
         const mightBeSub =
           isSubtitleUrl(reqUrl) ||
@@ -143,6 +174,7 @@
       try {
         if (this.status < 200 || this.status >= 300) return;
         const url = this.__srtAiUrl || '';
+        emitAudioPts(url);
         if (this.responseType === '' || this.responseType === 'text') {
           const text = this.responseText;
           if (maybeEmitPlaylist(url, text)) return;

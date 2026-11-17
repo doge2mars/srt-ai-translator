@@ -426,6 +426,9 @@
       playlists: [],
       activePlaylistUrl: '',
       lastPrefetchAt: 0,
+      mseTimestampOffset: null,
+      lastAudioPts: null,
+      audioBaseOffset: null,
       lastRawHead: '',
       trackLabels: {},
       seq: 0
@@ -603,7 +606,7 @@
       if (state.hls.playlists.length > 6) state.hls.playlists.shift();
     }
     if (state.hls.segments.size > 0) rebuildFromSegments();
-    prefetchAroundTime(state.video ? state.video.currentTime : 0);
+    prefetchAroundTime(getEffectiveVideoTime());
     return true;
   }
 
@@ -629,6 +632,12 @@
     const out = {
       playlists: state.hls.playlists,
       playlistEntries: state.hls.playlist.size,
+      activePlaylistUrl: state.hls.activePlaylistUrl,
+      mseTimestampOffset: state.hls.mseTimestampOffset,
+      lastAudioPts: state.hls.lastAudioPts,
+      audioBaseOffset: state.hls.audioBaseOffset,
+      sliderTime: getPlayerSliderTime(),
+      effectiveTime: state.video ? Math.round(getEffectiveVideoTime() * 100) / 100 : null,
       activeTrack: pickActiveTrack(),
       activeTrackLabel: trackLabel(pickActiveTrack()),
       trackLabels: state.hls.trackLabels,
@@ -718,6 +727,40 @@
     }, 800);
   }
 
+  function getPlayerSliderTime() {
+    try {
+      const host = (rootEl && rootEl.parentElement) || (state.video && findPlayerContainer(state.video)) || document;
+      const sliders = host.querySelectorAll ? host.querySelectorAll('[role="slider"][aria-valuenow]') : [];
+      for (const s of sliders) {
+        const val = parseFloat(s.getAttribute('aria-valuenow'));
+        const max = parseFloat(s.getAttribute('aria-valuemax'));
+        if (Number.isFinite(val) && Number.isFinite(max) && max > 120) {
+          return val;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function getEffectiveVideoTime() {
+    const v = state.video;
+    if (!v) return 0;
+    const raw = v.currentTime;
+    if (Number.isFinite(v.duration)) return raw;
+
+    if (typeof state.hls.mseTimestampOffset === 'number' && Math.abs(state.hls.mseTimestampOffset) > 1) {
+      return Math.max(0, raw - state.hls.mseTimestampOffset);
+    }
+    const sliderT = getPlayerSliderTime();
+    if (sliderT !== null && sliderT > raw + 5) {
+      return sliderT;
+    }
+    if (typeof state.hls.audioBaseOffset === 'number' && state.hls.audioBaseOffset > 5) {
+      return Math.max(0, raw + state.hls.audioBaseOffset);
+    }
+    return raw;
+  }
+
   function renderCurrentCue() {
     if (!subBoxEl) return;
     if (!state.settings.enabled || !state.video || state.cues.length === 0) {
@@ -725,7 +768,7 @@
       return;
     }
 
-    const t = state.video.currentTime - (state.settings.timeOffset || 0);
+    const t = getEffectiveVideoTime() - (state.settings.timeOffset || 0);
     const idx = Parser.findCueIndexAtTime(state.cues, t);
     if (idx === -1) {
       state.activeCueId = -1;
@@ -783,7 +826,7 @@
 
     try {
       while (state.settings.enabled && state.cues.length > 0) {
-        const currentTime = state.video ? state.video.currentTime - (state.settings.timeOffset || 0) : 0;
+        const currentTime = state.video ? getEffectiveVideoTime() - (state.settings.timeOffset || 0) : 0;
         const startIdx = Parser.findNextCueIndex(state.cues, Math.max(0, currentTime));
         const batchSize = Math.max(5, Math.min(30, Number(state.settings.batchSize) || 15));
 
@@ -1154,13 +1197,13 @@
 
     video.addEventListener('timeupdate', () => {
       renderCurrentCue();
-      if (state.hls.activePlaylistUrl) prefetchAroundTime(video.currentTime);
+      if (state.hls.activePlaylistUrl) prefetchAroundTime(getEffectiveVideoTime());
     });
     video.addEventListener('seeked', () => {
       renderCurrentCue();
       if (state.hls.activePlaylistUrl) {
         state.hls.lastPrefetchAt = 0;
-        prefetchAroundTime(video.currentTime);
+        prefetchAroundTime(getEffectiveVideoTime());
       }
       scheduleTranslation();
     });
@@ -1199,6 +1242,24 @@
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     const data = event.data;
+    if (data && data.source === 'srt-ai-interceptor' && data.type === 'MSE_OFFSET') {
+      state.hls.mseTimestampOffset = data.timestampOffset;
+      renderCurrentCue();
+      return;
+    }
+    if (data && data.source === 'srt-ai-interceptor' && data.type === 'MEDIA_PTS') {
+      state.hls.lastAudioPts = data.audioPts;
+      const v = state.video;
+      if (v && !Number.isFinite(v.duration) && v.buffered && v.buffered.length > 0) {
+        const bEnd = v.buffered.end(v.buffered.length - 1);
+        const est = data.audioPts - bEnd;
+        if (est > 15 && state.hls.audioBaseOffset === null) {
+          state.hls.audioBaseOffset = est;
+          renderCurrentCue();
+        }
+      }
+      return;
+    }
     if (data && data.source === 'srt-ai-interceptor' && data.type === 'PLAYLIST_CAPTURED') {
       if (data.url) triedPlaylists.add(data.url);
       handleSubtitlePlaylist(data.content, data.url || location.href);
@@ -1331,8 +1392,9 @@
         lastText: state.cues[state.cues.length - 1].text.slice(0, 30)
       };
       if (v) {
-        const curIdx = Parser.findCueIndexAtTime(state.cues, v.currentTime);
-        const t = v.currentTime - (state.settings.timeOffset || 0);
+        const effT = getEffectiveVideoTime();
+        const t = effT - (state.settings.timeOffset || 0);
+        const curIdx = Parser.findCueIndexAtTime(state.cues, t);
         const nextIdx = Parser.findNextCueIndex(state.cues, t);
         info.nearCues = state.cues
           .slice(Math.max(0, nextIdx - 2), nextIdx + 2)
