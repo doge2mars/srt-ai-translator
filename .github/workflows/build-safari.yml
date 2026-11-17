@@ -38,6 +38,32 @@ jobs:
       - name: Build unsigned macOS App
         run: |
           set -o pipefail
+          # Create a temporary self-signed code-signing certificate so ValidateEmbeddedBinary sees matching .app/.appex signatures
+          cat > /tmp/cert.cfg <<'EOF'
+          [ req ]
+          default_bits = 2048
+          distinguished_name = req_dn
+          prompt = no
+          x509_extensions = v3_codesign
+          [ req_dn ]
+          CN = SRT AI Local Build
+          [ v3_codesign ]
+          keyUsage = digitalSignature
+          extendedKeyUsage = codeSigning
+          EOF
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/key.pem -out /tmp/cert.pem -days 1 -config /tmp/cert.cfg
+          openssl pkcs12 -export -legacy -out /tmp/cert.p12 -inkey /tmp/key.pem -in /tmp/cert.pem -passout pass:buildpass 2>/dev/null || \
+            openssl pkcs12 -export -out /tmp/cert.p12 -inkey /tmp/key.pem -in /tmp/cert.pem -passout pass:buildpass
+          KEYCHAIN=/tmp/build.keychain-db
+          security create-keychain -p buildpass "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p buildpass "$KEYCHAIN"
+          security import /tmp/cert.p12 -k "$KEYCHAIN" -P buildpass -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k buildpass "$KEYCHAIN"
+          security add-trusted-cert -r trustRoot -k "$KEYCHAIN" /tmp/cert.pem || true
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
           XCODEPROJ=$(find /tmp/safari-proj -maxdepth 3 -name "*.xcodeproj" | head -n 1)
           echo "Found Xcode project: $XCODEPROJ"
           xcodebuild -list -json -project "$XCODEPROJ"
@@ -49,12 +75,12 @@ jobs:
             -configuration Release \
             -destination 'platform=macOS' \
             -derivedDataPath /tmp/safari-build \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="SRT AI Local Build" \
+            CODE_SIGNING_REQUIRED=YES \
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN" \
             build 2>&1 | tee /tmp/xcodebuild.log
 
       - name: Print build error summary on failure
