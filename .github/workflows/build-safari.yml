@@ -49,9 +49,12 @@ jobs:
             -configuration Release \
             -destination 'platform=macOS' \
             -derivedDataPath /tmp/safari-build \
-            CODE_SIGN_IDENTITY="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
             build 2>&1 | tee /tmp/xcodebuild.log
 
       - name: Print build error summary on failure
