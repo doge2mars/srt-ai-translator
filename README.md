@@ -54,20 +54,46 @@ git clone https://github.com/doge2mars/srt-ai-translator.git
 
 ---
 
-### 2. 在 Safari 中安装使用（macOS）
+### 2. 在 Safari 中安装与编译（macOS）
 
-1. 确保电脑已安装 Xcode（或安装 Xcode Command Line Tools）：
+> **说明**：Safari 不支持直接加载解压文件夹，必须封装为 `.app` 扩展应用。
+
+#### 方式 A：直接下载预编译好的 Safari App（推荐 · 本地免装 Xcode）
+
+1. 前往 [**GitHub Releases 页面**](https://github.com/doge2mars/srt-ai-translator/releases) 下载 `SRT-AI-Translator-Safari-macOS.zip`（也可在 [GitHub Actions](https://github.com/doge2mars/srt-ai-translator/actions) 最新绿色构建记录的 **Artifacts** 中下载）。
+2. 解压后将 `SRT AI Translator.app` 拖入 **应用程序（`/Applications`）** 文件夹。
+3. 打开「终端」，执行以下命令清除下载隔离标记：
    ```bash
-   xcode-select --install
+   xattr -cr "/Applications/SRT AI Translator.app"
    ```
-2. 在终端进入本项目目录，运行苹果官方转换工具打包为 Safari App 扩展：
+4. 打开 **Safari → 设置 → 高级**，勾选底部的 **「显示网页开发者功能」**。
+5. 切换到同一设置窗口最右侧新出现的 **「开发者」** 标签页，勾选 **「允许未签名的扩展」**（输入 Mac 密码确认）。
+6. 切换到 **「扩展」** 标签页，勾选启用 **SRT AI Translator**，并在右侧网站权限中设为「始终允许」即可。
+
+> **若「扩展」列表中未出现**：可在终端执行一次手动注册，再按 `Cmd + Q` 完全退出并重开 Safari：
+> ```bash
+> /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f -R -trusted "/Applications/SRT AI Translator.app"
+> pluginkit -a "/Applications/SRT AI Translator.app/Contents/PlugIns/SRT AI Translator Extension.appex"
+> ```
+
+#### 方式 B：本地从源码编译 Safari App（需要完整版 Xcode）
+
+1. 从 Mac App Store 安装完整版 **Xcode**（仅安装 Command Line Tools 不包含 Safari 转换工具）。
+2. 将插件源码精简复制到临时目录并转换工程：
    ```bash
-   cd srt-ai-translator
-   xcrun safari-web-extension-converter . --project-location ~/Desktop/SRT-AI-Safari --app-name "SRT AI Translator"
+   mkdir -p /tmp/ext-src && cp manifest.json /tmp/ext-src/ && cp -R icons src /tmp/ext-src/
+   xcrun safari-web-extension-converter /tmp/ext-src \
+     --project-location ~/Desktop/SRT-AI-Safari \
+     --app-name "SRT AI Translator" \
+     --bundle-identifier "com.local.srt-ai-translator" \
+     --macos-only --swift --no-prompt
    ```
-3. Xcode 会自动打开生成的工程，在顶部菜单选择签名 Team（个人免费账号即可），点击左上角 **Run (▶)** 运行一次；
-4. 打开 **Safari 浏览器 -> 设置 -> 扩展**，勾选启用 **SRT AI Translator**；
-5. 在「网站权限」中允许本插件访问您的 NAS 播放地址或所有网站即可。
+3. Xcode 会自动打开生成的工程，在 **Signing & Capabilities** 中选择你的个人 Apple ID（免费账号即可），点击左上角 **Run (▶)** 编译运行一次。
+4. 若不想登录 Apple ID，也可以命令行无证书编译并保留沙盒权限进行本地签名（完整脚本可参考仓库内的 [`.github/workflows/build-safari.yml`](.github/workflows/build-safari.yml)）。
+
+#### 方式 C：GitHub Actions 云端自动编译
+
+- 本仓库已配置 [`.github/workflows/build-safari.yml`](.github/workflows/build-safari.yml)。Fork 本仓库后，进入 **Actions → Build Safari Extension (macOS) → Run workflow**，即可在 GitHub 提供的 macOS 环境里自动完成转换、沙盒签名并打包出 `.zip`。
 
 ---
 
