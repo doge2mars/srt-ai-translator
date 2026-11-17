@@ -503,7 +503,11 @@ document.getElementById('diagBtn').addEventListener('click', async () => {
     ua: navigator.userAgent,
     frames: all,
     mediaRequestCount: net && net.mediaCount,
-    requests: ((net && net.requests) || []).map((r) => `${r.status} ${r.type} [${r.ct.split(';')[0]}] ${r.url.slice(0, 200)}`)
+    requests: ((net && net.requests) || []).map((r) => {
+      const u = r.url || '';
+      const displayUrl = u.length > 150 ? `${u.slice(0, 70)}...${u.slice(-60)}` : u;
+      return `${r.status} ${r.type} [${r.ct.split(';')[0]}] ${displayUrl}`;
+    })
   };
   out.value = JSON.stringify(report, null, 2);
 });

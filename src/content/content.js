@@ -36,6 +36,7 @@
     subtitleLoadedAt: 0,
     lastPageUrl: location.href,
     lastVideoSrc: '',
+    streamBasePts: null,
     diag: { interceptorHits: [], monitorUrls: [] }
   };
 
@@ -419,13 +420,47 @@
 
   async function loadSubtitleContent(rawText, sourceLabel, subUrl = '') {
     const rawClean = Parser.extractSubtitleText(rawText) || rawText;
-    const newCues = Parser.parseSubtitle(rawClean, { url: subUrl });
-    if (!newCues || newCues.length === 0) return;
 
     // Detect segmented HLS/DASH WebVTT chunks (e.g., Disney+ pts_xxx.vtt, Apple TV, etc.)
     const isChunk =
       /(pts_\d+|seg(ment)?[-_]?\d+|frag[-_]?\d+|\/subs?\/chunk)/i.test(subUrl) ||
       /X-TIMESTAMP-MAP/i.test(rawText);
+
+    if (isChunk) {
+      const ptsMatch = (subUrl || '').match(/pts_(\d+)/i);
+      let chunkPts = ptsMatch ? parseInt(ptsMatch[1], 10) / 1000 : 0;
+      if (!chunkPts) {
+        const mpegMatch = (rawClean || '').match(/MPEGTS:(\d+)/i);
+        if (mpegMatch) chunkPts = parseInt(mpegMatch[1], 10) / 90000;
+      }
+
+      if (state.streamBasePts === null && chunkPts > 0) {
+        const curTime = state.video ? state.video.currentTime : 0;
+        if (chunkPts > 30) {
+          // If video is within the first 5 minutes (or 300s), this chunk corresponds to the stream start
+          if (curTime < 300) {
+            state.streamBasePts = chunkPts;
+          } else {
+            // Seeked / resumed mid-video: estimate stream's base PTS
+            state.streamBasePts = Math.max(0, chunkPts - curTime);
+          }
+        } else {
+          state.streamBasePts = 0;
+        }
+
+        // Retroactively adjust any previously loaded cues if needed
+        if (state.cues.length > 0 && state.streamBasePts > 30 && state.cues[0].start >= state.streamBasePts - 10) {
+          const offset = state.streamBasePts;
+          state.cues.forEach((c) => {
+            c.start = Math.max(0, c.start - offset);
+            c.end = Math.max(0, c.end - offset);
+          });
+        }
+      }
+    }
+
+    const newCues = Parser.parseSubtitle(rawClean, { url: subUrl, basePts: state.streamBasePts });
+    if (!newCues || newCues.length === 0) return;
 
     if (isChunk && state.cues.length > 0) {
       // Incrementally merge new chunk into existing cues without wiping out earlier/later cues
@@ -889,6 +924,7 @@
     state.failCount = {};
     state.lastError = '';
     state.activeCueId = -1;
+    state.streamBasePts = null;
     domSub.lastText = '';
     updateToolbarUI();
     renderCurrentCue();
@@ -1060,6 +1096,7 @@
       }
     }
     info.activeCueId = state.activeCueId;
+    info.streamBasePts = state.streamBasePts;
     info.cuesTotal = state.cues.length;
     if (state.cues.length > 0) {
       info.cueRange = {

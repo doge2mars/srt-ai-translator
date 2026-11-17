@@ -237,6 +237,11 @@
       }
     }
 
+    // Subtract stream initial PTS if provided (HLS elementary stream epoch normalization)
+    if (options && typeof options.basePts === 'number' && options.basePts > 0) {
+      timeOffset = Math.max(0, timeOffset - options.basePts);
+    }
+
     const normalized = content.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const blocks = normalized.split(/\n{2,}/);
     const cues = [];
