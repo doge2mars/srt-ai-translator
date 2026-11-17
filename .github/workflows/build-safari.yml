@@ -37,6 +37,7 @@ jobs:
 
       - name: Build unsigned macOS App
         run: |
+          set -o pipefail
           XCODEPROJ=$(find /tmp/safari-proj -maxdepth 3 -name "*.xcodeproj" | head -n 1)
           echo "Found Xcode project: $XCODEPROJ"
           xcodebuild -list -json -project "$XCODEPROJ"
@@ -48,11 +49,18 @@ jobs:
             -configuration Release \
             -destination 'platform=macOS' \
             -derivedDataPath /tmp/safari-build \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            DEVELOPMENT_TEAM="" \
-            build
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee /tmp/xcodebuild.log
+
+      - name: Print build error summary on failure
+        if: failure()
+        run: |
+          echo "### xcodebuild error tail" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -i -E "error:|fatal:|signing|provisioning|scheme" /tmp/xcodebuild.log | tail -n 30 >> "$GITHUB_STEP_SUMMARY" || tail -n 40 /tmp/xcodebuild.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package .app as zip
         run: |
