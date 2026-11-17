@@ -36,7 +36,7 @@
     subtitleLoadedAt: 0,
     lastPageUrl: location.href,
     lastVideoSrc: '',
-    hls: { segments: new Map(), playlist: new Map(), playlists: [], lastRawHead: '' },
+    hls: { segments: new Map(), playlist: new Map(), playlists: [], lastRawHead: '', trackLabels: {}, seq: 0 },
     diag: { interceptorHits: [], monitorUrls: [] }
   };
 
@@ -445,6 +445,7 @@
       if (!cues || cues.length === 0) return;
     }
     state.hls.lastRawHead = (rawClean || '').slice(0, 220);
+    const existing = state.hls.segments.get(key);
     state.hls.segments.set(key, {
       key,
       track: key.includes('/') ? key.split('/')[0] : '',
@@ -452,28 +453,27 @@
       relative,
       firstRaw,
       cues,
-      at: Date.now()
+      at: existing ? existing.at : ++state.hls.seq
     });
     rebuildFromSegments();
   }
 
   function pickActiveTrack() {
-    const byTrack = new Map();
-    for (const seg of state.hls.segments.values()) {
-      const t = byTrack.get(seg.track) || { count: 0, last: 0 };
-      t.count += 1;
-      t.last = Math.max(t.last, seg.at);
-      byTrack.set(seg.track, t);
-    }
+    // The player only fetches segments of the subtitle track currently selected by the user,
+    // so the track of the most recently *first-seen* segment is the active one.
     let best = null;
-    let bestVal = null;
-    for (const [track, v] of byTrack) {
-      if (!bestVal || v.count > bestVal.count || (v.count === bestVal.count && v.last > bestVal.last)) {
-        best = track;
-        bestVal = v;
+    let bestAt = -1;
+    for (const seg of state.hls.segments.values()) {
+      if (seg.at > bestAt) {
+        bestAt = seg.at;
+        best = seg.track;
       }
     }
     return best;
+  }
+
+  function trackLabel(track) {
+    return (track && state.hls.trackLabels[track]) || (track ? track.slice(0, 8) : '');
   }
 
   function segmentOffset(seg) {
@@ -520,7 +520,7 @@
     state.failCount = {};
     state.activeCueId = -1;
     const alignNote = mappedCount === segCount && segCount > 0 ? '已按播放列表对齐' : mappedCount > 0 ? `部分对齐 ${mappedCount}/${segCount}` : '未对齐(无播放列表)';
-    state.subtitleSource = `自动捕获: 分段流 (${cues.length}条, ${alignNote})`;
+    state.subtitleSource = `自动捕获: 分段流 [${trackLabel(track)}] (${cues.length}条, ${alignNote})`;
     state.subtitleLoadedAt = Date.now();
     updateToolbarUI();
     renderCurrentCue();
@@ -533,6 +533,13 @@
     const entries = Parser.parseHlsPlaylist(text, url).filter((e) => /\.(vtt|webvtt)$/i.test(e.key));
     if (entries.length === 0) return false;
     for (const e of entries) state.hls.playlist.set(e.key, e);
+    const fname = (url || '').split('?')[0].split('/').pop() || '';
+    const lm = fname.match(/composite_([A-Za-z]{2,3}(?:-[A-Za-z]+)?)_([A-Z]+)/);
+    const label = lm ? `${lm[1]}${lm[2] && lm[2] !== 'NORMAL' ? ' ' + lm[2] : ''}` : fname.slice(0, 24);
+    for (const e of entries) {
+      const tr = e.key.includes('/') ? e.key.split('/')[0] : '';
+      if (tr) state.hls.trackLabels[tr] = label;
+    }
     const tail = (url || '').split('?')[0].split('/').slice(-2).join('/');
     if (!state.hls.playlists.some((p) => p.url === tail)) {
       state.hls.playlists.push({
@@ -570,6 +577,8 @@
       playlists: state.hls.playlists,
       playlistEntries: state.hls.playlist.size,
       activeTrack: pickActiveTrack(),
+      activeTrackLabel: trackLabel(pickActiveTrack()),
+      trackLabels: state.hls.trackLabels,
       lastRawHead: state.hls.lastRawHead,
       segments: []
     };
@@ -577,7 +586,8 @@
       const { offset, mapped, entry } = segmentOffset(seg);
       out.segments.push({
         key: seg.key.split('/').pop(),
-        track: (seg.track || '').slice(0, 8),
+        track: trackLabel(seg.track),
+        seq: seg.at,
         segPts: seg.segPts,
         firstRaw: seg.firstRaw,
         relative: seg.relative,
@@ -1051,7 +1061,7 @@
     state.failCount = {};
     state.lastError = '';
     state.activeCueId = -1;
-    state.hls = { segments: new Map(), playlist: new Map(), playlists: [], lastRawHead: '' };
+    state.hls = { segments: new Map(), playlist: new Map(), playlists: [], lastRawHead: '', trackLabels: {}, seq: 0 };
     domSub.lastText = '';
     updateToolbarUI();
     renderCurrentCue();
