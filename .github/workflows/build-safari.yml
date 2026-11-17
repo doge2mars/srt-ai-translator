@@ -10,9 +10,14 @@ on:
       - 'icons/**'
       - '.github/workflows/build-safari.yml'
 
+concurrency:
+  group: build-safari
+  cancel-in-progress: true
+
 jobs:
   build-safari:
     runs-on: macos-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
@@ -56,12 +61,12 @@ jobs:
             openssl pkcs12 -export -out /tmp/cert.p12 -inkey /tmp/key.pem -in /tmp/cert.pem -passout pass:buildpass
           KEYCHAIN=/tmp/build.keychain-db
           security create-keychain -p buildpass "$KEYCHAIN"
-          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN"
           security default-keychain -s "$KEYCHAIN"
           security unlock-keychain -p buildpass "$KEYCHAIN"
-          security import /tmp/cert.p12 -k "$KEYCHAIN" -P buildpass -T /usr/bin/codesign
+          security import /tmp/cert.p12 -k "$KEYCHAIN" -P buildpass -A
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k buildpass "$KEYCHAIN"
-          security add-trusted-cert -r trustRoot -k "$KEYCHAIN" /tmp/cert.pem || true
           security find-identity -v -p codesigning "$KEYCHAIN"
 
           XCODEPROJ=$(find /tmp/safari-proj -maxdepth 3 -name "*.xcodeproj" | head -n 1)
