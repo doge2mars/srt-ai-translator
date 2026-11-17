@@ -36,7 +36,7 @@
     subtitleLoadedAt: 0,
     lastPageUrl: location.href,
     lastVideoSrc: '',
-    hls: { segments: new Map(), playlist: new Map(), playlists: [], lastRawHead: '', trackLabels: {}, seq: 0 },
+    hls: createHlsState(),
     diag: { interceptorHits: [], monitorUrls: [] }
   };
 
@@ -418,6 +418,20 @@
     reader.readAsText(file, 'utf-8');
   }
 
+  function createHlsState() {
+    return {
+      segments: new Map(),
+      playlist: new Map(),
+      playlistMap: new Map(),
+      playlists: [],
+      activePlaylistUrl: '',
+      lastPrefetchAt: 0,
+      lastRawHead: '',
+      trackLabels: {},
+      seq: 0
+    };
+  }
+
   // ---------------- HLS segmented subtitles (Disney+ etc.) ----------------
   // Each pts_XXXX.vtt is stored with cue times in the *media* (PTS) domain. Its position on the
   // player timeline (video.currentTime) comes from the subtitle m3u8 playlist (sum of #EXTINF).
@@ -446,6 +460,7 @@
     }
     state.hls.lastRawHead = (rawClean || '').slice(0, 220);
     const existing = state.hls.segments.get(key);
+    const seq = existing ? existing.at : ++state.hls.seq;
     state.hls.segments.set(key, {
       key,
       track: key.includes('/') ? key.split('/')[0] : '',
@@ -453,8 +468,17 @@
       relative,
       firstRaw,
       cues,
-      at: existing ? existing.at : ++state.hls.seq
+      at: seq
     });
+    // If this newly arrived segment belongs to a known playlist, keep activePlaylistUrl synced
+    if (!existing) {
+      for (const [plUrl, pl] of state.hls.playlistMap) {
+        if (pl.keys.has(key)) {
+          state.hls.activePlaylistUrl = plUrl;
+          break;
+        }
+      }
+    }
     rebuildFromSegments();
   }
 
@@ -484,6 +508,7 @@
 
   function rebuildFromSegments() {
     const track = pickActiveTrack();
+    const activePl = state.hls.activePlaylistUrl ? state.hls.playlistMap.get(state.hls.activePlaylistUrl) : null;
     const textMap = new Map();
     state.cues.forEach((c) => {
       if (state.translations[c.id]) textMap.set(c.text, state.translations[c.id]);
@@ -494,7 +519,8 @@
     let mappedCount = 0;
     let segCount = 0;
     for (const seg of state.hls.segments.values()) {
-      if (seg.track !== track) continue;
+      const inActive = activePl ? activePl.keys.has(seg.key) : seg.track === track;
+      if (!inActive) continue;
       segCount += 1;
       const { offset, mapped } = segmentOffset(seg);
       if (mapped) mappedCount += 1;
@@ -519,13 +545,35 @@
     state.translations = translations;
     state.failCount = {};
     state.activeCueId = -1;
+    const activeLabel = (activePl && activePl.label) || trackLabel(track);
     const alignNote = mappedCount === segCount && segCount > 0 ? '已按播放列表对齐' : mappedCount > 0 ? `部分对齐 ${mappedCount}/${segCount}` : '未对齐(无播放列表)';
-    state.subtitleSource = `自动捕获: 分段流 [${trackLabel(track)}] (${cues.length}条, ${alignNote})`;
+    state.subtitleSource = `自动捕获: 分段流 [${activeLabel}] (${cues.length}条, ${alignNote})`;
     state.subtitleLoadedAt = Date.now();
     updateToolbarUI();
     renderCurrentCue();
     if (cues.length !== prevCount || Object.keys(translations).length < cues.length) {
       scheduleTranslation();
+    }
+  }
+
+  function prefetchAroundTime(t) {
+    const activePl = state.hls.activePlaylistUrl ? state.hls.playlistMap.get(state.hls.activePlaylistUrl) : null;
+    if (!activePl || !activePl.entries || activePl.entries.length === 0) return;
+    const now = Date.now();
+    if (now - state.hls.lastPrefetchAt < 1500) return;
+    state.hls.lastPrefetchAt = now;
+
+    const minT = Math.max(0, t - 30);
+    const maxT = t + 600;
+    const candidates = activePl.entries.filter(
+      (e) => e.start + e.duration >= minT && e.start <= maxT
+    );
+    let queued = 0;
+    for (const e of candidates) {
+      if (queued >= 10) break;
+      if (state.hls.segments.has(e.key) || triedUrls.has(e.uri)) continue;
+      queued += 1;
+      tryLoadSubtitleUrl(e.uri);
     }
   }
 
@@ -536,11 +584,15 @@
     const fname = (url || '').split('?')[0].split('/').pop() || '';
     const lm = fname.match(/composite_([A-Za-z]{2,3}(?:-[A-Za-z]+)?)_([A-Z]+)/);
     const label = lm ? `${lm[1]}${lm[2] && lm[2] !== 'NORMAL' ? ' ' + lm[2] : ''}` : fname.slice(0, 24);
+    const keys = new Set();
     for (const e of entries) {
+      keys.add(e.key);
       const tr = e.key.includes('/') ? e.key.split('/')[0] : '';
       if (tr) state.hls.trackLabels[tr] = label;
     }
     const tail = (url || '').split('?')[0].split('/').slice(-2).join('/');
+    state.hls.playlistMap.set(tail, { url: tail, label, entries, keys });
+    state.hls.activePlaylistUrl = tail;
     if (!state.hls.playlists.some((p) => p.url === tail)) {
       state.hls.playlists.push({
         url: tail,
@@ -551,6 +603,7 @@
       if (state.hls.playlists.length > 6) state.hls.playlists.shift();
     }
     if (state.hls.segments.size > 0) rebuildFromSegments();
+    prefetchAroundTime(state.video ? state.video.currentTime : 0);
     return true;
   }
 
@@ -1061,7 +1114,7 @@
     state.failCount = {};
     state.lastError = '';
     state.activeCueId = -1;
-    state.hls = { segments: new Map(), playlist: new Map(), playlists: [], lastRawHead: '', trackLabels: {}, seq: 0 };
+    state.hls = createHlsState();
     domSub.lastText = '';
     updateToolbarUI();
     renderCurrentCue();
@@ -1099,9 +1152,16 @@
     updateToolbarUI();
     checkVideoTracks(video);
 
-    video.addEventListener('timeupdate', renderCurrentCue);
+    video.addEventListener('timeupdate', () => {
+      renderCurrentCue();
+      if (state.hls.activePlaylistUrl) prefetchAroundTime(video.currentTime);
+    });
     video.addEventListener('seeked', () => {
       renderCurrentCue();
+      if (state.hls.activePlaylistUrl) {
+        state.hls.lastPrefetchAt = 0;
+        prefetchAroundTime(video.currentTime);
+      }
       scheduleTranslation();
     });
     video.addEventListener('play', () => {
