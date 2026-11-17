@@ -62,9 +62,12 @@ jobs:
           test -n "$APP_PATH" && test -d "$APP_PATH/Contents/MacOS"
           test -n "$APPEX_PATH" && test -d "$APPEX_PATH/Contents/MacOS"
 
-          # Ad-hoc sign .appex first, then .app (required on Apple Silicon)
-          codesign --force --sign - "$APPEX_PATH"
-          codesign --force --sign - "$APP_PATH"
+          # Ad-hoc sign .appex first, then .app with app-sandbox entitlement (required by macOS PlugInKit & Apple Silicon)
+          APP_ENT=$(find /tmp/safari-proj -name "*.entitlements" ! -name "*Extension*" | head -n 1)
+          EXT_ENT=$(find /tmp/safari-proj -name "*Extension*.entitlements" | head -n 1)
+          echo "Using entitlements: APP=$APP_ENT EXT=$EXT_ENT"
+          codesign --force --sign - ${EXT_ENT:+--entitlements "$EXT_ENT"} "$APPEX_PATH"
+          codesign --force --sign - ${APP_ENT:+--entitlements "$APP_ENT"} "$APP_PATH"
           codesign --verify --deep --strict "$APP_PATH"
 
       - name: Print build error summary on failure
