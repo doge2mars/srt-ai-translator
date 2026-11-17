@@ -303,6 +303,17 @@
       }
     }
 
+    // Normalize absolute timestamps if raw WebVTT cues already contain base PTS (e.g. 00:07:08.845)
+    if (options && typeof options.basePts === 'number' && options.basePts > 0 && cues.length > 0) {
+      if (cues[0].start >= options.basePts - 10) {
+        const bp = options.basePts;
+        cues.forEach((c) => {
+          c.start = Math.max(0, c.start - bp);
+          c.end = Math.max(0, c.end - bp);
+        });
+      }
+    }
+
     // Sort by start time just in case
     cues.sort((a, b) => a.start - b.start);
     cues.forEach((c, idx) => {

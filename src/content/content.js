@@ -462,6 +462,24 @@
     const newCues = Parser.parseSubtitle(rawClean, { url: subUrl, basePts: state.streamBasePts });
     if (!newCues || newCues.length === 0) return;
 
+    // Failsafe PTS normalization: if cues start far ahead of video currentTime (> 30s ahead while playback is < 300s)
+    if (isChunk && newCues.length > 0 && state.video && state.video.currentTime < 300) {
+      if (newCues[0].start > 30 && newCues[0].start > state.video.currentTime + 30) {
+        const offset = newCues[0].start;
+        state.streamBasePts = (state.streamBasePts || 0) + offset;
+        newCues.forEach((c) => {
+          c.start = Math.max(0, c.start - offset);
+          c.end = Math.max(0, c.end - offset);
+        });
+        if (state.cues.length > 0) {
+          state.cues.forEach((c) => {
+            c.start = Math.max(0, c.start - offset);
+            c.end = Math.max(0, c.end - offset);
+          });
+        }
+      }
+    }
+
     if (isChunk && state.cues.length > 0) {
       // Incrementally merge new chunk into existing cues without wiping out earlier/later cues
       const prevCount = state.cues.length;
