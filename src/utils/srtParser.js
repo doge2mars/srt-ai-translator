@@ -231,7 +231,9 @@
     } else if (options && typeof options.url === 'string') {
       const ptsMatch = options.url.match(/pts_(\d+)/i);
       if (ptsMatch) {
-        timeOffset = parseInt(ptsMatch[1], 10) / 90000;
+        const rawPts = parseInt(ptsMatch[1], 10);
+        // Disney+ (BAMTech) uses millisecond timestamps in pts_xxxxxx.vtt (e.g., 2563728 ms = 2563.7s = 42m43s)
+        timeOffset = rawPts / 1000;
       }
     }
 
@@ -277,18 +279,23 @@
       const text = cleanSubtitleText(lines.slice(timeLineIdx + 1).join('\n'));
       if (!text) continue;
 
-      // Apply HLS WebVTT PTS offset if cues are relative to chunk
-      if (timeOffset > 0 && start < 120 && timeOffset > 10) {
-        start += timeOffset;
-        end += timeOffset;
-      }
-
       cues.push({
         id: cues.length,
         start,
         end,
         text
       });
+    }
+
+    // Apply HLS WebVTT PTS offset if chunk cues are relative (e.g. starting near 0:00 while offset is minutes into the video)
+    if (timeOffset > 0 && cues.length > 0) {
+      const firstStart = cues[0].start;
+      if (firstStart < timeOffset - 10) {
+        cues.forEach((c) => {
+          c.start += timeOffset;
+          c.end += timeOffset;
+        });
+      }
     }
 
     // Sort by start time just in case

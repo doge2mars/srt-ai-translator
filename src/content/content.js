@@ -1020,6 +1020,9 @@
     };
     if (v) {
       const r = v.getBoundingClientRect();
+      info.currentTime = Math.round(v.currentTime * 100) / 100;
+      info.paused = v.paused;
+      info.duration = Math.round((v.duration || 0) * 100) / 100;
       info.video = {
         size: `${Math.round(r.width)}x${Math.round(r.height)}`,
         src: (v.currentSrc || v.src || '').slice(0, 160),
@@ -1054,6 +1057,28 @@
         }
         info.hostTag = `${host.tagName.toLowerCase()}.${(host.className || '').toString().slice(0, 60)}`;
         info.textInPlayer = texts;
+      }
+    }
+    info.activeCueId = state.activeCueId;
+    info.cuesTotal = state.cues.length;
+    if (state.cues.length > 0) {
+      info.cueRange = {
+        firstStart: state.cues[0].start,
+        firstEnd: state.cues[0].end,
+        firstText: state.cues[0].text.slice(0, 30),
+        lastStart: state.cues[state.cues.length - 1].start,
+        lastEnd: state.cues[state.cues.length - 1].end,
+        lastText: state.cues[state.cues.length - 1].text.slice(0, 30)
+      };
+      if (v) {
+        const curIdx = Parser.findCueIndexAtTime(state.cues, v.currentTime);
+        info.activeCueMatch = curIdx !== -1 ? {
+          idx: curIdx,
+          start: state.cues[curIdx].start,
+          end: state.cues[curIdx].end,
+          text: state.cues[curIdx].text.slice(0, 40),
+          hasTrans: !!state.translations[state.cues[curIdx].id]
+        } : null;
       }
     }
     info.interceptorHits = state.diag.interceptorHits.slice(-10);
