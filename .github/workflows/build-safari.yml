@@ -1,0 +1,65 @@
+name: Build Safari Extension (macOS)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'manifest.json'
+      - 'src/**'
+      - 'icons/**'
+      - '.github/workflows/build-safari.yml'
+
+jobs:
+  build-safari:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Stage clean extension files
+        run: |
+          mkdir -p /tmp/ext-src
+          cp manifest.json /tmp/ext-src/
+          cp -R icons src /tmp/ext-src/
+
+      - name: Convert Web Extension to Safari Xcode project
+        run: |
+          xcrun safari-web-extension-converter /tmp/ext-src \
+            --project-location /tmp/safari-proj \
+            --app-name "SRT AI Translator" \
+            --bundle-identifier "com.local.srt-ai-translator" \
+            --macos-only \
+            --swift \
+            --no-open \
+            --no-prompt
+
+      - name: Build unsigned macOS App
+        run: |
+          XCODEPROJ=$(find /tmp/safari-proj -maxdepth 3 -name "*.xcodeproj" | head -n 1)
+          echo "Found Xcode project: $XCODEPROJ"
+          xcodebuild \
+            -project "$XCODEPROJ" \
+            -scheme "SRT AI Translator" \
+            -configuration Release \
+            -derivedDataPath /tmp/safari-build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package .app as zip
+        run: |
+          APP_PATH=$(find /tmp/safari-build/Build/Products/Release -maxdepth 2 -name "*.app" | head -n 1)
+          echo "Found built app: $APP_PATH"
+          mkdir -p dist
+          ditto -c -k --keepParent "$APP_PATH" dist/SRT-AI-Translator-Safari-macOS.zip
+          ls -lh dist/SRT-AI-Translator-Safari-macOS.zip
+
+      - name: Upload Safari App artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SRT-AI-Translator-Safari-macOS
+          path: dist/SRT-AI-Translator-Safari-macOS.zip
+          retention-days: 30
