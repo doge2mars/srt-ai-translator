@@ -186,14 +186,14 @@
     rootEl.append(subBoxEl, toolbar, dropHint);
 
     // Restore custom toolbar position if user previously dragged it
-    chrome.storage.local.get('srtAiToolbarPos').then((res) => {
+    safeStorageGet('srtAiToolbarPos').then((res) => {
       const pos = res && res.srtAiToolbarPos;
       if (pos && typeof pos.leftPct === 'number' && typeof pos.topPct === 'number' && toolbarEl) {
         toolbarEl.classList.add('custom-pos');
         toolbarEl.style.left = `${Math.max(0, Math.min(92, pos.leftPct))}%`;
         toolbarEl.style.top = `${Math.max(0, Math.min(92, pos.topPct))}%`;
       }
-    }).catch(() => {});
+    });
 
     // Mouse drag support for toolbar position (grab status text or bar background)
     let isDraggingTb = false;
@@ -243,7 +243,7 @@
           const topPct = Math.round(((tRect.top - rRect.top) / rRect.height) * 1000) / 10;
           toolbar.style.left = `${leftPct}%`;
           toolbar.style.top = `${topPct}%`;
-          chrome.storage.local.set({ srtAiToolbarPos: { leftPct, topPct } }).catch(() => {});
+          safeStorageSet({ srtAiToolbarPos: { leftPct, topPct } });
         }
       }
     });
@@ -328,8 +328,27 @@
     renderCurrentCue();
   }
 
+  function safeStorageGet(keys) {
+    try {
+      if (!chrome?.runtime?.id) return Promise.resolve({});
+      return Promise.resolve(chrome.storage.local.get(keys)).catch(() => ({}));
+    } catch (_) {
+      return Promise.resolve({});
+    }
+  }
+
+  function safeStorageSet(obj) {
+    try {
+      if (!chrome?.runtime?.id) return;
+      Promise.resolve(chrome.storage.local.set(obj)).catch(() => {});
+    } catch (_) {}
+  }
+
   function savePartialSettings(partial) {
-    chrome.runtime.sendMessage({ type: 'SAVE_SETTINGS', settings: partial }).catch(() => {});
+    try {
+      if (!chrome?.runtime?.id) return;
+      Promise.resolve(chrome.runtime.sendMessage({ type: 'SAVE_SETTINGS', settings: partial })).catch(() => {});
+    } catch (_) {}
   }
 
   function applyOverlayStyles() {
@@ -809,7 +828,7 @@
     clearTimeout(cacheSaveTimer);
     cacheSaveTimer = setTimeout(() => {
       const key = getCacheKey();
-      chrome.storage.local.set({ [key]: state.translations }).catch(() => {});
+      safeStorageSet({ [key]: state.translations });
     }, 800);
   }
 
