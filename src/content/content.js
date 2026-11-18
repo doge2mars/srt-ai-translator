@@ -32,6 +32,7 @@
     lastError: '',
     activeCueId: -1,
     hideTimer: null,
+    toolbarDismissedUntil: 0,
     failCount: {},
     subtitleLoadedAt: 0,
     lastPageUrl: location.href,
@@ -43,6 +44,7 @@
   // --- UI Elements ---
   let rootEl = null;
   let subBoxEl = null;
+  let toolbarEl = null;
   let translatedEl = null;
   let originalEl = null;
   let statusEl = null;
@@ -159,23 +161,92 @@
     const closeBtn = document.createElement('button');
     closeBtn.className = 'srt-ai-btn srt-ai-btn-close';
     closeBtn.textContent = '✕';
-    closeBtn.title = '收起控制条（按 Option+T 或将鼠标移至右上角可重新唤出）';
+    closeBtn.title = '收起控制条（8秒内不再自动弹出，按 Option+T 可随时唤出）';
     closeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
+      state.toolbarDismissedUntil = Date.now() + 8000;
       clearTimeout(state.hideTimer);
       rootEl.classList.remove('show-toolbar');
+      rootEl.classList.add('force-hide');
     });
 
     toolbar.addEventListener('mouseenter', () => {
+      if (Date.now() < state.toolbarDismissedUntil) return;
       clearTimeout(state.hideTimer);
+      rootEl.classList.remove('force-hide');
       rootEl.classList.add('show-toolbar');
     });
     toolbar.addEventListener('mouseleave', () => {
+      if (Date.now() < state.toolbarDismissedUntil) return;
       showToolbarTemporarily(1200);
     });
 
+    toolbarEl = toolbar;
     toolbar.append(statusEl, toggleBtn, modeBtn, minusBtn, offsetLabel, plusBtn, uploadBtn, exportBtn, closeBtn, fileInput);
     rootEl.append(subBoxEl, toolbar, dropHint);
+
+    // Restore custom toolbar position if user previously dragged it
+    chrome.storage.local.get('srtAiToolbarPos').then((res) => {
+      const pos = res && res.srtAiToolbarPos;
+      if (pos && typeof pos.leftPct === 'number' && typeof pos.topPct === 'number' && toolbarEl) {
+        toolbarEl.classList.add('custom-pos');
+        toolbarEl.style.left = `${Math.max(0, Math.min(92, pos.leftPct))}%`;
+        toolbarEl.style.top = `${Math.max(0, Math.min(92, pos.topPct))}%`;
+      }
+    }).catch(() => {});
+
+    // Mouse drag support for toolbar position (grab status text or bar background)
+    let isDraggingTb = false;
+    let tbStartX = 0;
+    let tbStartY = 0;
+    let tbInitLeft = 0;
+    let tbInitTop = 0;
+
+    toolbar.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || (e.target && e.target.tagName === 'BUTTON')) return;
+      if (!rootEl) return;
+      const rRect = rootEl.getBoundingClientRect();
+      const tRect = toolbar.getBoundingClientRect();
+      isDraggingTb = true;
+      tbStartX = e.clientX;
+      tbStartY = e.clientY;
+      tbInitLeft = tRect.left - rRect.left;
+      tbInitTop = tRect.top - rRect.top;
+      toolbar.classList.add('custom-pos', 'is-dragging');
+      toolbar.style.left = `${tbInitLeft}px`;
+      toolbar.style.top = `${tbInitTop}px`;
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isDraggingTb || !rootEl) return;
+      const rRect = rootEl.getBoundingClientRect();
+      const tRect = toolbar.getBoundingClientRect();
+      const maxLeft = Math.max(0, rRect.width - tRect.width);
+      const maxTop = Math.max(0, rRect.height - tRect.height);
+      const nextLeft = Math.max(0, Math.min(maxLeft, tbInitLeft + (e.clientX - tbStartX)));
+      const nextTop = Math.max(0, Math.min(maxTop, tbInitTop + (e.clientY - tbStartY)));
+      toolbar.style.left = `${nextLeft}px`;
+      toolbar.style.top = `${nextTop}px`;
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (!isDraggingTb) return;
+      isDraggingTb = false;
+      toolbar.classList.remove('is-dragging');
+      if (rootEl) {
+        const rRect = rootEl.getBoundingClientRect();
+        const tRect = toolbar.getBoundingClientRect();
+        if (rRect.width > 0 && rRect.height > 0) {
+          const leftPct = Math.round(((tRect.left - rRect.left) / rRect.width) * 1000) / 10;
+          const topPct = Math.round(((tRect.top - rRect.top) / rRect.height) * 1000) / 10;
+          toolbar.style.left = `${leftPct}%`;
+          toolbar.style.top = `${topPct}%`;
+          chrome.storage.local.set({ srtAiToolbarPos: { leftPct, topPct } }).catch(() => {});
+        }
+      }
+    });
 
     // Mouse drag support for subtitle position
     let isDragging = false;
@@ -316,6 +387,8 @@
 
   function showToolbarTemporarily(delay = 2200) {
     if (!rootEl) return;
+    if (Date.now() < state.toolbarDismissedUntil) return;
+    rootEl.classList.remove('force-hide');
     rootEl.classList.add('show-toolbar');
     clearTimeout(state.hideTimer);
     state.hideTimer = setTimeout(() => {
@@ -377,11 +450,24 @@
       host.addEventListener(
         'mousemove',
         (e) => {
+          if (Date.now() < state.toolbarDismissedUntil) return;
+          if (toolbarEl && toolbarEl.classList.contains('custom-pos')) {
+            const tr = toolbarEl.getBoundingClientRect();
+            if (
+              e.clientX >= tr.left - 35 &&
+              e.clientX <= tr.right + 35 &&
+              e.clientY >= tr.top - 25 &&
+              e.clientY <= tr.bottom + 25
+            ) {
+              showToolbarTemporarily(2200);
+            }
+            return;
+          }
           const rect = host.getBoundingClientRect();
-          const xFromRight = rect.right - e.clientX;
           const yFromTop = e.clientY - rect.top;
-          // 仅当鼠标真正靠近右上角控制区 (宽 280px × 高 90px) 时才轻柔显现
-          if (xFromRight >= 0 && xFromRight <= 280 && yFromTop >= 0 && yFromTop <= 90) {
+          const distFromCenter = Math.abs(e.clientX - (rect.left + rect.width / 2));
+          // 默认位于顶部居中，避免遮挡右上角「ⓘ / 分享 / 稍后观看」等播放器按钮
+          if (yFromTop >= 0 && yFromTop <= 72 && distFromCenter <= 240) {
             showToolbarTemporarily(2200);
           }
         },
@@ -1493,6 +1579,8 @@
       savePartialSettings({ enabled: state.settings.enabled, displayMode: state.settings.displayMode });
       updateToolbarUI();
       renderCurrentCue();
+      state.toolbarDismissedUntil = 0;
+      if (rootEl) rootEl.classList.remove('force-hide');
       showToolbarTemporarily();
       if (state.settings.enabled) scheduleTranslation();
     }
