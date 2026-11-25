@@ -42,6 +42,7 @@ const els = {
   customPrompt: document.getElementById('customPrompt'),
   displayMode: document.getElementById('displayMode'),
   batchSize: document.getElementById('batchSize'),
+  concurrency: document.getElementById('concurrency'),
   fontSize: document.getElementById('fontSize'),
   fontSizeVal: document.getElementById('fontSizeVal'),
   bottomOffset: document.getElementById('bottomOffset'),
@@ -131,7 +132,8 @@ function collectSettingsFromUI() {
     domainPreset: els.domainPreset.value,
     customPrompt: els.customPrompt.value.trim(),
     displayMode: els.displayMode.value,
-    batchSize: Number(els.batchSize.value) || 15,
+    batchSize: Math.max(5, Math.min(30, Number(els.batchSize.value) || 15)),
+    concurrency: Math.max(1, Math.min(8, Math.floor(Number(els.concurrency.value) || 1))),
     fontSize: Number(els.fontSize.value) || 22,
     bottomOffset: Number(els.bottomOffset.value) || 48,
     autoDownloadSrt: !!els.autoDownloadSrt.checked,
@@ -169,6 +171,7 @@ function applySettingsToUI(s) {
   els.customPrompt.value = s.customPrompt || '';
   els.displayMode.value = s.displayMode || 'bilingual';
   els.batchSize.value = s.batchSize || 15;
+  if (els.concurrency) els.concurrency.value = Math.max(1, Math.min(8, Number(s.concurrency) || 1));
   els.fontSize.value = s.fontSize || 22;
   els.fontSizeVal.textContent = els.fontSize.value;
   els.bottomOffset.value = s.bottomOffset || 48;
@@ -418,8 +421,8 @@ els.delModelBtn?.addEventListener('click', () => {
   saveAndSyncSettings(false);
 });
 
-[els.baseUrl, els.model, els.apiKey, els.customPrompt, els.batchSize].forEach((el) => {
-  el.addEventListener('input', scheduleAutoSave);
+[els.baseUrl, els.model, els.apiKey, els.customPrompt, els.batchSize, els.concurrency].forEach((el) => {
+  el?.addEventListener('input', scheduleAutoSave);
 });
 
 els.fontSize.addEventListener('input', () => {

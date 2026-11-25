@@ -17,6 +17,7 @@
       bottomOffset: 48,
       bgOpacity: 0.65,
       batchSize: 15,
+      concurrency: 1,
       timeOffset: 0,
       autoDownloadSrt: false,
       domainPreset: 'general',
@@ -398,7 +399,8 @@
       statusEl.title = '可直接拖入 .srt 文件或等待播放器加载字幕';
     } else {
       const doneCount = Object.keys(state.translations).length;
-      const prefix = state.translating ? '翻译中' : '已就绪';
+      const concTag = state.translating && activeWorkers > 1 ? `(${activeWorkers}并发)` : '';
+      const prefix = state.translating ? `翻译中${concTag}` : '已就绪';
       statusEl.textContent = `${prefix} ${doneCount}/${state.cues.length}`;
       statusEl.title = `来源: ${state.subtitleSource || '未知'}`;
     }
@@ -787,6 +789,7 @@
       return; // Same subtitle already loaded
     }
 
+    resetTranslationWorkers();
     state.cues = newCues;
     state.subtitleHash = hash;
     state.subtitleSource = sourceLabel || '自动捕获';
@@ -915,103 +918,159 @@
     subBoxEl.classList.remove('hidden');
   }
 
-  // --- Lookahead Batch Translation Scheduler ---
-  let workerRunning = false;
+  // --- Lookahead Concurrent Batch Translation Scheduler ---
+  let activeWorkers = 0;
+  let abortGeneration = 0;
+  let sharedConsecutiveFailures = 0;
+  const inFlightClaims = new Set();
 
-  async function scheduleTranslation() {
-    if (workerRunning) return;
-    if (!state.settings.enabled || state.cues.length === 0) return;
+  function cueClaimKey(cue) {
+    return `${Math.round(cue.start * 10)}_${cue.text}`;
+  }
 
-    workerRunning = true;
-    state.translating = true;
-    state.lastError = '';
-    updateToolbarUI();
-    let consecutiveFailures = 0;
-    const needs = (cue) => !state.translations[cue.id] && (state.failCount[cue.id] || 0) < 2;
+  function resetTranslationWorkers() {
+    abortGeneration++;
+    inFlightClaims.clear();
+    sharedConsecutiveFailures = 0;
+    state.translating = false;
+  }
 
-    try {
-      while (state.settings.enabled && state.cues.length > 0) {
-        const currentTime = state.video ? getEffectiveVideoTime() - (state.settings.timeOffset || 0) : 0;
-        const startIdx = Parser.findNextCueIndex(state.cues, Math.max(0, currentTime));
-        const batchSize = Math.max(5, Math.min(30, Number(state.settings.batchSize) || 15));
+  function getMaxConcurrency() {
+    return Math.max(1, Math.min(8, Math.floor(Number(state.settings.concurrency) || 1)));
+  }
 
-        // Find first untranslated cue from current playback position onwards,
-        // and if all upcoming cues are done, wrap around to translate earlier cues.
-        let targetStart = -1;
-        for (let i = startIdx; i < state.cues.length; i++) {
-          if (needs(state.cues[i])) {
-            targetStart = i;
-            break;
-          }
-        }
-        if (targetStart === -1) {
-          for (let i = 0; i < startIdx; i++) {
-            if (needs(state.cues[i])) {
-              targetStart = i;
-              break;
-            }
-          }
-        }
+  function needsCueTranslation(cue) {
+    return (
+      !state.translations[cue.id] &&
+      !inFlightClaims.has(cueClaimKey(cue)) &&
+      (state.failCount[cue.id] || 0) < 2
+    );
+  }
 
-        if (targetStart === -1) {
-          // All cues translated!
-          if (
-            state.settings.autoDownloadSrt &&
-            state.subtitleHash &&
-            state.autoDownloadedHash !== state.subtitleHash &&
-            Object.keys(state.translations).length > 0
-          ) {
-            state.autoDownloadedHash = state.subtitleHash;
-            downloadTranslatedSrt();
-          }
+  function claimNextBatch() {
+    if (!state.settings.enabled || state.cues.length === 0) return null;
+    const currentTime = state.video ? getEffectiveVideoTime() - (state.settings.timeOffset || 0) : 0;
+    const startIdx = Parser.findNextCueIndex(state.cues, Math.max(0, currentTime));
+    const batchSize = Math.max(5, Math.min(30, Number(state.settings.batchSize) || 15));
+
+    let targetStart = -1;
+    for (let i = startIdx; i < state.cues.length; i++) {
+      if (needsCueTranslation(state.cues[i])) {
+        targetStart = i;
+        break;
+      }
+    }
+    if (targetStart === -1) {
+      for (let i = 0; i < startIdx; i++) {
+        if (needsCueTranslation(state.cues[i])) {
+          targetStart = i;
           break;
         }
+      }
+    }
+    if (targetStart === -1) return null;
 
-        const targetCues = [];
-        for (let i = targetStart; i < state.cues.length && targetCues.length < batchSize; i++) {
-          if (needs(state.cues[i])) {
-            targetCues.push({ id: state.cues[i].id, text: state.cues[i].text });
-          }
-        }
+    const targetCues = [];
+    // Keep a single batch within a contiguous window (batchSize * 2) so context stays coherent
+    const scanLimit = Math.min(state.cues.length, targetStart + batchSize * 2);
+    for (let i = targetStart; i < scanLimit && targetCues.length < batchSize; i++) {
+      const c = state.cues[i];
+      if (needsCueTranslation(c)) {
+        const claimKey = cueClaimKey(c);
+        inFlightClaims.add(claimKey);
+        targetCues.push({ id: c.id, start: c.start, text: c.text, claimKey });
+      }
+    }
+    if (targetCues.length === 0) return null;
 
-        const contextCues = state.cues
-          .slice(Math.max(0, targetStart - 3), targetStart)
-          .map((c) => ({ id: c.id, text: c.text }));
+    const contextCues = state.cues
+      .slice(Math.max(0, targetStart - 3), targetStart)
+      .map((c) => ({ id: c.id, text: c.text }));
 
+    return { targetCues, contextCues };
+  }
+
+  function applyBatchResult(targetCues, map) {
+    for (const tc of targetCues) {
+      const tr = map[tc.id] ?? map[String(tc.id)];
+      // Fast path when cue array wasn't re-indexed mid-flight
+      if (state.cues[tc.id] && state.cues[tc.id].text === tc.text) {
+        if (tr) state.translations[tc.id] = tr;
+        else state.failCount[tc.id] = (state.failCount[tc.id] || 0) + 1;
+        continue;
+      }
+      // Fallback when HLS segment merge shifted cue IDs mid-flight
+      const matched = state.cues.find(
+        (c) => c.text === tc.text && Math.abs(c.start - tc.start) < 1.0
+      ) || state.cues.find((c) => c.text === tc.text && !state.translations[c.id]);
+      if (matched) {
+        if (tr) state.translations[matched.id] = tr;
+        else state.failCount[matched.id] = (state.failCount[matched.id] || 0) + 1;
+      }
+    }
+  }
+
+  async function runTranslationWorker(myGen, initialDelayMs = 0) {
+    if (initialDelayMs > 0) {
+      await new Promise((r) => setTimeout(r, initialDelayMs));
+    }
+    try {
+      while (myGen === abortGeneration && state.settings.enabled && state.cues.length > 0) {
+        if (activeWorkers > getMaxConcurrency()) break;
+
+        const job = claimNextBatch();
+        if (!job) break;
+
+        const { targetCues, contextCues } = job;
         let resp;
         try {
           resp = await chrome.runtime.sendMessage({
             type: 'TRANSLATE_BATCH',
-            payload: { contextCues, targetCues }
+            payload: {
+              contextCues,
+              targetCues: targetCues.map((c) => ({ id: c.id, text: c.text }))
+            }
           });
         } catch (e) {
           resp = { ok: false, error: e?.message || String(e) };
+        } finally {
+          targetCues.forEach((c) => inFlightClaims.delete(c.claimKey));
         }
 
+        if (myGen !== abortGeneration) return;
+
         if (!resp || !resp.ok) {
-          state.lastError = (resp && resp.error) || '翻译请求失败';
-          consecutiveFailures++;
-          if (isContextInvalidatedError(state.lastError)) break;
-          // Network/model down: stop and let user fix settings
-          if (/HTTP|fetch|Failed|连接|refused/i.test(state.lastError) || consecutiveFailures >= 3) break;
-          // Unparseable batch: skip these cues (count failure) and keep going
+          const errMsg = (resp && resp.error) || '翻译请求失败';
+          state.lastError = errMsg;
+          sharedConsecutiveFailures++;
+          if (isContextInvalidatedError(errMsg)) {
+            abortGeneration++;
+            break;
+          }
+          const isRateLimit = /429|频控|overloaded|rate/i.test(errMsg);
+          if (isRateLimit && sharedConsecutiveFailures < Math.max(4, getMaxConcurrency() + 2)) {
+            updateToolbarUI();
+            await new Promise((r) => setTimeout(r, 1200));
+            continue;
+          }
+          const maxFailStop = Math.max(3, getMaxConcurrency() + 1);
+          if (/HTTP|fetch|Failed|连接|refused/i.test(errMsg) || sharedConsecutiveFailures >= maxFailStop) {
+            abortGeneration++;
+            break;
+          }
           targetCues.forEach((c) => {
-            state.failCount[c.id] = (state.failCount[c.id] || 0) + 1;
+            if (state.cues[c.id] && state.cues[c.id].text === c.text) {
+              state.failCount[c.id] = (state.failCount[c.id] || 0) + 1;
+            }
           });
           updateToolbarUI();
           continue;
         }
-        consecutiveFailures = 0;
-        state.lastError = '';
 
-        const map = resp.translations || {};
-        for (const [idStr, text] of Object.entries(map)) {
-          state.translations[Number(idStr)] = text;
-        }
-        // Cues the model kept dropping
-        targetCues.forEach((c) => {
-          if (!state.translations[c.id]) state.failCount[c.id] = (state.failCount[c.id] || 0) + 1;
-        });
+        sharedConsecutiveFailures = 0;
+        state.lastError = '';
+        applyBatchResult(targetCues, resp.translations || {});
+
         persistCacheDebounced();
         renderCurrentCue();
         updateToolbarUI();
@@ -1020,12 +1079,49 @@
         }
       }
     } catch (err) {
-      state.lastError = err?.message || String(err);
+      if (myGen === abortGeneration) {
+        state.lastError = err?.message || String(err);
+      }
     } finally {
-      workerRunning = false;
-      state.translating = false;
+      activeWorkers = Math.max(0, activeWorkers - 1);
+      if (activeWorkers === 0) {
+        state.translating = false;
+        const allDone =
+          state.settings.enabled &&
+          state.cues.length > 0 &&
+          !state.cues.some((c) => !state.translations[c.id] && (state.failCount[c.id] || 0) < 2);
+        if (
+          allDone &&
+          state.settings.autoDownloadSrt &&
+          state.subtitleHash &&
+          state.autoDownloadedHash !== state.subtitleHash &&
+          Object.keys(state.translations).length > 0
+        ) {
+          state.autoDownloadedHash = state.subtitleHash;
+          downloadTranslatedSrt();
+        }
+      }
       updateToolbarUI();
     }
+  }
+
+  function scheduleTranslation() {
+    if (!state.settings.enabled || state.cues.length === 0) return;
+    const maxConc = getMaxConcurrency();
+    if (activeWorkers >= maxConc) return;
+
+    const myGen = abortGeneration;
+    let spawned = 0;
+    while (activeWorkers < maxConc) {
+      const hasUnclaimed = state.cues.some((c) => needsCueTranslation(c));
+      if (!hasUnclaimed) break;
+      activeWorkers++;
+      state.translating = true;
+      const delayMs = spawned * 120;
+      spawned++;
+      runTranslationWorker(myGen, delayMs);
+    }
+    updateToolbarUI();
   }
 
   // --- DOM Subtitle Fallback Observer (when player renders subtitles in DOM) ---
@@ -1255,6 +1351,7 @@
   }
 
   function resetForNewVideo() {
+    resetTranslationWorkers();
     state.cues = [];
     state.subtitleHash = '';
     state.subtitleSource = '';
@@ -1556,10 +1653,10 @@
       applyOverlayStyles();
       updateToolbarUI();
       if (prevKey !== nextKey && state.cues.length > 0) {
+        resetTranslationWorkers();
         state.translations = {};
         state.failCount = {};
-        chrome.storage.local
-          .get(nextKey)
+        safeStorageGet(nextKey)
           .then((res) => {
             if (res && res[nextKey]) state.translations = res[nextKey];
           })
@@ -1568,6 +1665,7 @@
             scheduleTranslation();
           });
       } else {
+        if (!state.settings.enabled) resetTranslationWorkers();
         renderCurrentCue();
         if (state.settings.enabled) scheduleTranslation();
       }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SRT AI Translator - 实时视频字幕翻译",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "专为飞牛OS等网页视频播放器打造的实时双语字幕翻译插件，支持本地AI模型(Ollama/LM Studio)与在线模型。",
   "permissions": [
     "storage",

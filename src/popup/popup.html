@@ -153,18 +153,23 @@
 
     <section class="card">
       <h2>显示与预翻译</h2>
+      <div class="field">
+        <label for="displayMode">显示模式</label>
+        <select id="displayMode">
+          <option value="bilingual">双语（译文+原文）</option>
+          <option value="translated">仅显示译文</option>
+          <option value="original">仅显示原文</option>
+        </select>
+      </div>
+
       <div class="row-2">
         <div class="field">
-          <label for="displayMode">显示模式</label>
-          <select id="displayMode">
-            <option value="bilingual">双语（译文+原文）</option>
-            <option value="translated">仅显示译文</option>
-            <option value="original">仅显示原文</option>
-          </select>
+          <label for="batchSize">每批预译句数 (5~30)</label>
+          <input type="number" id="batchSize" min="5" max="30" value="15" />
         </div>
         <div class="field">
-          <label for="batchSize">每批预译句数</label>
-          <input type="number" id="batchSize" min="5" max="30" value="15" />
+          <label for="concurrency" title="同时发起的翻译批次数：本地模型建议 1，在线 API 可设 2~5 加速预译">并发批次数 (1~8)</label>
+          <input type="number" id="concurrency" min="1" max="8" value="1" title="本地模型建议填 1；在线高速 API 可设 2~5 大幅提速（注意服务商并发限流）" />
         </div>
       </div>
 

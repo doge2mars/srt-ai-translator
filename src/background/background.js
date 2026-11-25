@@ -10,6 +10,7 @@ const DEFAULT_SETTINGS = {
   bottomOffset: 48,
   bgOpacity: 0.65,
   batchSize: 15,
+  concurrency: 1,
   timeOffset: 0,
   autoDownloadSrt: false,
   domainPreset: 'general',
