@@ -20,14 +20,41 @@
   if (window.__srtAiInterceptorInstalled) return;
   window.__srtAiInterceptorInstalled = true;
 
+  const SKIP_BIN_URL_RE =
+    /\.(mp4a?|m4s|m4v|ts|mkv|webm|avi|mov|mp3|aac|flac|ogg|bif|woff2?|ttf|otf|png|jpe?g|gif|webp|svg|ico|wasm|css|js|mjs)(\?|$)/i;
+  const SKIP_BIN_CT_RE =
+    /^(video|audio|image|font)\/|application\/(bif|wasm|javascript|x-javascript|pdf|zip)/i;
+
   function isSubtitleUrl(url) {
     if (!url || typeof url !== 'string') return false;
     const clean = url.split('?')[0].toLowerCase();
+    if (SKIP_BIN_URL_RE.test(clean)) return false;
     return (
       clean.endsWith('.srt') ||
       clean.endsWith('.vtt') ||
       clean.endsWith('.ass') ||
       /sub(title)?|caption|timedtext|aisubtitle|vtt|srt|track/i.test(url)
+    );
+  }
+
+  function isSubtitleOrPlaylistCt(ct) {
+    if (!ct) return false;
+    return /text\/(vtt|srt)|subrip|mpegurl|x-ssa|x-ass/i.test(ct);
+  }
+
+  function headBytesLookTextual(buf) {
+    const sample = new Uint8Array(buf, 0, Math.min(512, buf.byteLength));
+    // Reject MP4/fMP4 boxes ('ftyp', 'moof', 'styp', 'sidx') or NUL-heavy binary chunks immediately
+    let nulCount = 0;
+    for (let i = 0; i < sample.length; i++) {
+      if (sample[i] === 0) {
+        nulCount++;
+        if (nulCount > 2) return false;
+      }
+    }
+    const head = new TextDecoder('utf-8').decode(sample).trimStart();
+    return (
+      /^\uFEFF?(WEBVTT|#EXTM3U|\[Script Info\]|\[Events\]|<transcript|\{|\[|\d+\r?\n\d{1,2}:\d{2}:)/i.test(head)
     );
   }
 
@@ -137,21 +164,22 @@
       try {
         const reqUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
         emitAudioPts(reqUrl);
-        const ct = (response.headers && response.headers.get('content-type')) || '';
-        const mightBeSub =
-          isSubtitleUrl(reqUrl) ||
-          /mpegurl/i.test(ct) ||
-          /\.m3u8(\?|$)/i.test(reqUrl) ||
-          ct.includes('text/vtt') ||
-          ct.includes('application/x-subrip') ||
-          ct.includes('text/srt') ||
-          ct.includes('text/plain') ||
-          ct.includes('application/octet-stream') ||
-          (ct.includes('application/json') && isSubtitleUrl(reqUrl));
+        if (response.ok && !SKIP_BIN_URL_RE.test(reqUrl)) {
+          const ct = (response.headers && response.headers.get('content-type')) || '';
+          if (!SKIP_BIN_CT_RE.test(ct)) {
+            const len = Number((response.headers && response.headers.get('content-length')) || 0);
+            const subUrl = isSubtitleUrl(reqUrl) || /\.m3u8(\?|$)/i.test(reqUrl);
+            const mightBeSub =
+              subUrl ||
+              isSubtitleOrPlaylistCt(ct) ||
+              ((ct.includes('text/plain') || ct.includes('application/octet-stream')) &&
+                (!len || len < 2 * 1024 * 1024));
 
-        if (mightBeSub && response.ok) {
-          const clone = response.clone();
-          clone.text().then((text) => emitSubtitle(reqUrl, text)).catch(() => {});
+            if (mightBeSub) {
+              const clone = response.clone();
+              clone.text().then((text) => emitSubtitle(reqUrl, text)).catch(() => {});
+            }
+          }
         }
       } catch (_) {
         // Ignore inspection errors
@@ -175,28 +203,47 @@
         if (this.status < 200 || this.status >= 300) return;
         const url = this.__srtAiUrl || '';
         emitAudioPts(url);
+        if (SKIP_BIN_URL_RE.test(url)) return;
+        const ct = (this.getResponseHeader && this.getResponseHeader('content-type')) || '';
+        if (SKIP_BIN_CT_RE.test(ct)) return;
+        const knownSubOrM3u8 = isSubtitleUrl(url) || /\.m3u8(\?|$)/i.test(url) || isSubtitleOrPlaylistCt(ct);
+
         if (this.responseType === '' || this.responseType === 'text') {
           const text = this.responseText;
           if (maybeEmitPlaylist(url, text)) return;
-          if (isSubtitleUrl(url) || looksLikeSubtitleText(text)) {
+          if (knownSubOrM3u8 || looksLikeSubtitleText(text)) {
             emitSubtitle(url, text);
           }
         } else if (this.responseType === 'arraybuffer' && this.response instanceof ArrayBuffer) {
-          if (isSubtitleUrl(url) || this.response.byteLength < 2 * 1024 * 1024) {
+          if (
+            this.response.byteLength < 2 * 1024 * 1024 &&
+            (knownSubOrM3u8 || headBytesLookTextual(this.response))
+          ) {
             const text = new TextDecoder('utf-8').decode(this.response);
             if (maybeEmitPlaylist(url, text)) return;
-            if (isSubtitleUrl(url) || looksLikeSubtitleText(text)) {
+            if (knownSubOrM3u8 || looksLikeSubtitleText(text)) {
               emitSubtitle(url, text);
             }
           }
         } else if (this.responseType === 'blob' && this.response instanceof Blob) {
-          if (isSubtitleUrl(url) || this.response.size < 2 * 1024 * 1024) {
-            this.response.text().then((text) => {
-              if (maybeEmitPlaylist(url, text)) return;
-              if (isSubtitleUrl(url) || looksLikeSubtitleText(text)) {
+          if (
+            this.response.size < 2 * 1024 * 1024 &&
+            (knownSubOrM3u8 || !this.response.type || !SKIP_BIN_CT_RE.test(this.response.type))
+          ) {
+            if (knownSubOrM3u8) {
+              this.response.text().then((text) => {
+                if (maybeEmitPlaylist(url, text)) return;
                 emitSubtitle(url, text);
-              }
-            }).catch(() => {});
+              }).catch(() => {});
+            } else {
+              this.response.slice(0, 512).arrayBuffer().then((headBuf) => {
+                if (!headBytesLookTextual(headBuf)) return;
+                return this.response.text().then((text) => {
+                  if (maybeEmitPlaylist(url, text)) return;
+                  if (looksLikeSubtitleText(text)) emitSubtitle(url, text);
+                });
+              }).catch(() => {});
+            }
           }
         } else if (this.responseType === 'json' && this.response && isSubtitleUrl(url)) {
           emitSubtitle(url, JSON.stringify(this.response));

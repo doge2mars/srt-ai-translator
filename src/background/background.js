@@ -294,7 +294,7 @@ async function callChatCompletion(settings, messages, temperature = 0.2) {
       model: modelName,
       messages: finalMessages,
       temperature,
-      max_tokens: 2048
+      max_tokens: 4096
     };
     if (isZhipu) {
       body.thinking = { type: 'disabled' };

@@ -1375,6 +1375,7 @@
       if (!isMatchingYouTubeVideo(data.url)) return;
       const fileName = (data.url || '').split('?')[0].split('/').pop() || '网络捕获';
       state.diag.interceptorHits.push(data.url || '(inline)');
+      if (state.diag.interceptorHits.length > 30) state.diag.interceptorHits.shift();
       loadSubtitleContent(data.content, `自动捕获: ${fileName}`, data.url || '');
     }
   });
@@ -1385,9 +1386,11 @@
     if (!url || triedUrls.has(url)) return;
     if (!state.video && !findPrimaryVideo()) return;
     if (!isMatchingYouTubeVideo(url)) return;
+    if (triedUrls.size > 500) triedUrls.clear();
     triedUrls.add(url);
     const entry = { url, result: 'pending' };
     state.diag.monitorUrls.push(entry);
+    if (state.diag.monitorUrls.length > 30) state.diag.monitorUrls.shift();
 
     let text = '';
     try {
@@ -1413,10 +1416,25 @@
     }
   }
 
+  function sanitizeDiagUrl(raw) {
+    if (!raw || typeof raw !== 'string') return '';
+    if (raw.startsWith('blob:') || raw.startsWith('data:')) return raw.slice(0, 100);
+    try {
+      const u = new URL(raw, location.origin);
+      // Redact CDN path-embedded auth tokens (e.g. Disney+ /dvt2=exp=...~hmac=.../)
+      const cleanPath = u.pathname.replace(/\/dvt2=[^/]+\//gi, '/dvt2=[REDACTED]/');
+      const vParam = u.searchParams.get('v');
+      const keptQuery = vParam ? `?v=${encodeURIComponent(vParam)}` : u.search ? '?[REDACTED]' : '';
+      return `${u.origin}${cleanPath}${keptQuery}`;
+    } catch (_) {
+      return raw.split('?')[0].replace(/\/dvt2=[^/]+\//gi, '/dvt2=[REDACTED]/');
+    }
+  }
+
   function collectDiagnostics() {
     const v = state.video;
     const info = {
-      frameUrl: location.href,
+      frameUrl: sanitizeDiagUrl(location.href),
       isTop: window === window.top,
       videoCount: collectVideosDeep(document).length,
       iframeCount: document.querySelectorAll('iframe').length,
@@ -1450,7 +1468,7 @@
       });
       info.video = {
         size: `${Math.round(r.width)}x${Math.round(r.height)}`,
-        src: (v.currentSrc || v.src || '').slice(0, 160),
+        src: sanitizeDiagUrl(v.currentSrc || v.src || '').slice(0, 160),
         textTracks: Array.from(v.textTracks || []).map((t) => ({
           kind: t.kind,
           label: t.label,
@@ -1514,8 +1532,10 @@
         } : null;
       }
     }
-    info.interceptorHits = state.diag.interceptorHits.slice(-10);
-    info.monitorUrls = state.diag.monitorUrls.slice(-10);
+    info.interceptorHits = state.diag.interceptorHits.slice(-10).map(sanitizeDiagUrl);
+    info.monitorUrls = state.diag.monitorUrls
+      .slice(-10)
+      .map((m) => ({ url: sanitizeDiagUrl(m.url), result: m.result }));
     return info;
   }
 
